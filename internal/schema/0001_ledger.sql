@@ -1,4 +1,4 @@
--- The ledger schema: accounts, transactions and postings.
+-- The ledger schema: accounts, transactions, postings and idempotency keys.
 -- Applied verbatim by internal/schema. There is no migration framework.
 
 
@@ -131,6 +131,68 @@ CREATE TRIGGER transactions_are_never_truncated
 CREATE TRIGGER postings_are_never_truncated
     BEFORE TRUNCATE ON postings
     FOR EACH STATEMENT EXECUTE FUNCTION reject_mutation();
+
+-- The primary key is the retry contract: a duplicate blocks rather than posts twice.
+CREATE TABLE idempotency_keys (
+    -- Chosen by the client, so the shape is checked and the content is not.
+    key text PRIMARY KEY
+        CONSTRAINT idempotency_keys_key_shape CHECK (key ~ '^[[:graph:]]{16,255}$'),
+
+    -- A digest of the request the key was first used for. A different one is refused.
+    request_hash bytea NOT NULL CHECK (length(request_hash) = 32),
+
+    -- Null only between reserving the key and recording the result.
+    transaction_id uuid REFERENCES transactions (id),
+
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- A committed key must name a transaction. Deferred, and it reads the row back, not NEW.
+CREATE FUNCTION idempotency_key_names_a_transaction() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    settled uuid;
+    found_it boolean;
+BEGIN
+    SELECT transaction_id, true INTO settled, found_it
+      FROM idempotency_keys
+     WHERE key = NEW.key;
+
+    -- Reserved and then deleted is a reservation given up.
+    IF found_it IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF settled IS NULL THEN
+        RAISE EXCEPTION 'idempotency key % was committed without a transaction', NEW.key
+            USING ERRCODE = 'LB003',
+                  HINT = 'Reserve the key, do the work, then record the transaction it created.';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER idempotency_keys_must_be_settled
+    AFTER INSERT OR UPDATE ON idempotency_keys
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION idempotency_key_names_a_transaction();
+
+-- A settled key is final: the first result is the only result. DELETE stays allowed.
+CREATE FUNCTION idempotency_record_is_final() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.transaction_id IS NOT NULL OR NEW.key <> OLD.key OR NEW.request_hash <> OLD.request_hash THEN
+        RAISE EXCEPTION 'idempotency key % is already settled', OLD.key
+            USING ERRCODE = 'LB004',
+                  HINT = 'The first result under a key is the only result. Use a different key.';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER idempotency_keys_settle_once
+    BEFORE UPDATE ON idempotency_keys
+    FOR EACH ROW EXECUTE FUNCTION idempotency_record_is_final();
 
 -- Balances are derived, never stored, and signed like a posting.
 CREATE VIEW account_balances AS

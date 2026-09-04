@@ -9,7 +9,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +105,66 @@ func Tx(t *testing.T) *sql.Tx {
 		}
 	})
 	return tx
+}
+
+// Disposable hands a test a pool on a database of its own: created empty, schema
+// applied, dropped when the test ends. It is for a test that has to COMMIT,
+// which the shared database cannot take because postings are never truncated.
+//
+// The name goes into DDL, where a placeholder cannot, so it must be plain and
+// must end in _test.
+func Disposable(t *testing.T, name string) *sql.DB {
+	t.Helper()
+
+	if !plainName.MatchString(name) || !strings.HasSuffix(name, testDBSuffix) {
+		t.Fatalf("%q is not a name this will create: lowercase, digits and underscores, ending in %s", name, testDBSuffix)
+	}
+
+	// The DDL runs on the shared pool: a database cannot be dropped from
+	// inside itself, and CREATE DATABASE cannot run inside a transaction.
+	admin := Open(t)
+	drop := func() {
+		if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + name + ` WITH (FORCE)`); err != nil {
+			t.Errorf("drop %s: %v", name, err)
+		}
+	}
+	// A run killed between the create and the drop would otherwise leave
+	// this failing forever.
+	drop()
+	if _, err := admin.Exec(`CREATE DATABASE ` + name); err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+
+	db, err := sql.Open("pgx", withDatabase(t, DSN(), name))
+	if err != nil {
+		drop()
+		t.Fatalf("open %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+		drop()
+	})
+	if _, err := schema.Apply(context.Background(), db); err != nil {
+		t.Fatalf("apply the schema to %s: %v", name, err)
+	}
+	return db
+}
+
+// plainName is what may be pasted into DDL. There is no placeholder for an
+// identifier, so the safety is that nothing outside this shape is ever pasted.
+var plainName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
+
+// withDatabase points a connection string at another database on the same
+// server.
+func withDatabase(t *testing.T, dsn, name string) string {
+	t.Helper()
+
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("read %s as a connection string: %v", dsn, err)
+	}
+	u.Path = "/" + name
+	return u.String()
 }
 
 // checkDisposable refuses any database whose name does not end in _test.
