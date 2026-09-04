@@ -98,7 +98,7 @@ func TestServeMountsTheLedgerReadSurface(t *testing.T) {
 
 	served := make(chan error, 1)
 	go func() {
-		served <- serveOn(ctx, ln, ledgerhttp.Handler(txReader{tx}, quiet()), quiet())
+		served <- serveOn(ctx, ln, ledgerhttp.Handler(txStore{tx}, quiet()), quiet())
 	}()
 
 	base := "http://" + ln.Addr().String()
@@ -140,6 +140,26 @@ func TestServeMountsTheLedgerReadSurface(t *testing.T) {
 	getJSON(t, base+"/v1/accounts/assets.csah", http.StatusNotFound, &refusal)
 	if refusal.Error != "no such account" || refusal.Code != "assets.csah" {
 		t.Errorf("the refusal was %+v, want the ledger's own", refusal)
+	}
+
+	var posted struct {
+		Transaction string `json:"transaction"`
+	}
+	postJSON(t, base+"/v1/transactions", http.StatusCreated, `{
+	  "currency": "GBP",
+	  "description": "Refund, in full",
+	  "postings": [
+	    {"account": "`+cash+`", "amount_minor": -500},
+	    {"account": "`+customer+`", "amount_minor": 500}
+	  ]
+	}`, &posted)
+	if posted.Transaction == "" {
+		t.Error("POST /v1/transactions returned no transaction id")
+	}
+
+	getJSON(t, base+"/v1/accounts/"+cash, http.StatusOK, &one)
+	if one.BalanceMinor != 4000 {
+		t.Errorf("%s = %d after the refund, want 4000", cash, one.BalanceMinor)
 	}
 
 	cancel()
@@ -229,10 +249,11 @@ func TestTheServerDefaultsToTheDatabaseTheTestsUse(t *testing.T) {
 	}
 }
 
-// txReader never commits: postings are append-only, so a committed test row would move every other test's counts.
-type txReader struct{ tx *sql.Tx }
+// txStore never commits: postings are append-only, so a committed test row would move every other test's counts.
+type txStore struct{ tx *sql.Tx }
 
-func (r txReader) Read(_ context.Context, f func(*sql.Tx) error) error { return f(r.tx) }
+func (s txStore) Read(_ context.Context, f func(*sql.Tx) error) error  { return f(s.tx) }
+func (s txStore) Write(_ context.Context, f func(*sql.Tx) error) error { return f(s.tx) }
 
 func seed(t *testing.T, tx *sql.Tx) {
 	t.Helper()
@@ -282,6 +303,27 @@ func waitUntilRefused(t *testing.T, addr string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("the listener was still accepting connections five seconds after the signal")
+}
+
+func postJSON(t *testing.T, url string, wantStatus int, send string, into any) {
+	t.Helper()
+
+	res, err := http.Post(url, "application/json", strings.NewReader(send))
+	if err != nil {
+		t.Fatalf("post %s: %v", url, err)
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", url, err)
+	}
+	if res.StatusCode != wantStatus {
+		t.Fatalf("POST %s gave %d, want %d\n%s", url, res.StatusCode, wantStatus, body)
+	}
+	if err := json.Unmarshal(body, into); err != nil {
+		t.Fatalf("POST %s returned %v\n%s", url, err, body)
+	}
 }
 
 func getJSON(t *testing.T, url string, wantStatus int, into any) {

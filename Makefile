@@ -14,7 +14,7 @@ ADDR        ?= 127.0.0.1:8080
 # A different port for the demo, so it cannot collide with a running `make run`.
 DEMO_ADDR ?= 127.0.0.1:58080
 
-.PHONY: all build clean db-down db-psql db-reset db-up fmt lint negative-controls run test vet
+.PHONY: all build clean db-down db-psql db-reset db-up demo-serve fmt lint negative-controls run test vet
 
 all: build vet lint test
 
@@ -30,6 +30,12 @@ test: db-up
 run: db-up build
 	$(BIN_DIR)/$(BINARY) serve -addr $(ADDR)
 
+## demo-serve: the binary serving on a socket, then a clean exit on SIGINT
+demo-serve:
+	@$(MAKE) --no-print-directory db-reset
+	@$(MAKE) --no-print-directory -s build
+	@tools/serve-demo.sh $(BIN_DIR)/$(BINARY) $(DEMO_ADDR); status=$$?; \
+		$(MAKE) --no-print-directory db-reset; exit $$status
 ## negative-controls: apply every declared mutation and check each test turns red
 negative-controls:
 	@$(MAKE) --no-print-directory db-reset

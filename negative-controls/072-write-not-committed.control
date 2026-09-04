@@ -1,0 +1,13 @@
+# Without the commit, a successful write is thrown away and the id names no row.
+
+title: a write that succeeded is rolled back instead of committed
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestPoolCommitsAWriteThatSucceeded -v ./internal/ledgerhttp/
+--- before
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit the write: %w", err)
+	}
+--- after
+	if err := tx.Rollback(); err != nil {
+		return fmt.Errorf("commit the write: %w", err)
+	}

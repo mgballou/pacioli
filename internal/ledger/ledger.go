@@ -30,6 +30,21 @@ var (
 	ErrRejected = errors.New("ledger rejected the entry")
 )
 
+// A LegError says which leg of an entry the server refused. It is typed so a
+// caller can name the leg without reading this package's error text.
+type LegError struct {
+	Index   int    // where the leg sat in Entry.Legs
+	Account string // the code that leg named
+	Err     error  // the refusal, wrapping the server's own *pgconn.PgError
+}
+
+func (e *LegError) Error() string {
+	return fmt.Sprintf("leg %d (%s): %s", e.Index, e.Account, e.Err)
+}
+
+// Unwrap keeps errors.Is working through a LegError.
+func (e *LegError) Unwrap() error { return e.Err }
+
 // A Leg is one side of a transaction: an account code and a signed amount in
 // minor units. Debit is positive, credit negative, and the sides must cancel.
 type Leg struct {
@@ -136,14 +151,23 @@ func classify(err error, legIndex int, leg Leg) error {
 		return fmt.Errorf("%w: %w", ErrUnbalanced, pgErr)
 
 	case pgErr.Code == "23502" && pgErr.ColumnName == "account_id":
-		return fmt.Errorf("leg %d: %w %q: %w", legIndex, ErrUnknownAccount, leg.Account, pgErr)
+		return legErr(legIndex, leg, ErrUnknownAccount, pgErr)
 
 	case pgErr.Code == "23503" && strings.Contains(pgErr.ConstraintName, "transaction_id"):
-		return fmt.Errorf("leg %d (%s): %w: %w", legIndex, leg.Account, ErrCurrencyMismatch, pgErr)
+		return legErr(legIndex, leg, ErrCurrencyMismatch, pgErr)
 	}
 
 	if legIndex >= 0 {
-		return fmt.Errorf("leg %d (%s): %w: %w", legIndex, leg.Account, ErrRejected, pgErr)
+		return legErr(legIndex, leg, ErrRejected, pgErr)
 	}
 	return fmt.Errorf("%w: %w", ErrRejected, pgErr)
+}
+
+// legErr pairs a refusal with the leg that caused it.
+func legErr(index int, leg Leg, reason error, pgErr *pgconn.PgError) error {
+	return &LegError{
+		Index:   index,
+		Account: leg.Account,
+		Err:     fmt.Errorf("%w: %w", reason, pgErr),
+	}
 }
