@@ -1,0 +1,11 @@
+# Without the trigger, a committed posting can be edited or deleted after the fact.
+
+title: a committed posting can be edited or deleted after the fact
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestPostingsCannotBeChangedOrDeleted -v ./internal/schema/
+--- before
+CREATE TRIGGER postings_are_append_only
+    BEFORE UPDATE OR DELETE ON postings
+    FOR EACH ROW EXECUTE FUNCTION reject_mutation();
+--- after
+-- negative control: postings are no longer append-only

@@ -1,0 +1,14 @@
+# Without the balance check, Postgres commits postings that do not cancel.
+
+title: an unbalanced transaction is allowed to commit
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestUnbalancedTransactionIsRejected -v ./internal/schema/
+--- before
+    IF net <> 0 THEN
+        RAISE EXCEPTION 'transaction % does not balance: % postings net to % (want 0)',
+            txn_id, legs, net
+            USING ERRCODE = 'LB001',
+                  HINT = 'Debits are positive, credits negative; the sides must cancel.';
+    END IF;
+--- after
+    -- negative control: the balance check is gone and the ledger takes anything

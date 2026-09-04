@@ -1,0 +1,13 @@
+# Without the rollback, a test's writes stay behind and every other test can see them.
+
+title: the transaction handed to a test is committed instead of rolled back
+file: internal/testdb/testdb.go
+run: go test -count=1 -run TestTxRollsBackWhenTheTestEnds -v ./internal/testdb/
+--- before
+		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
+			t.Errorf("rollback: %v", err)
+		}
+--- after
+		if err := tx.Commit(); err != nil && err != sql.ErrTxDone {
+			t.Errorf("commit: %v", err)
+		}

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: build, vet, staticcheck, race tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `make build` stamps the version from `git describe`, which needs
+          # more than the default single-commit clone.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: fmt
+        run: make fmt
+
+      - name: build
+        run: make build
+
+      - name: vet
+        run: make vet
+
+      - name: staticcheck
+        run: make lint
+
+      # `make test` brings the compose database up first, so CI runs the exact
+      # command a laptop runs. A `services:` block would be a second, divergent
+      # definition of the same database.
+      - name: test (race, against the container database)
+        run: make test
+
+      - name: database logs
+        if: failure()
+        run: docker compose -f compose.test.yaml logs postgres
+
+      - name: stop the database
+        if: always()
+        run: make db-down
+
+  controls:
+    name: every declared negative control goes red
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: every declared negative control goes red
+        run: make negative-controls
+
+      - name: stop the database
+        if: always()
+        run: make db-down

@@ -1,0 +1,9 @@
+# Without the git stamp, the binary reports a version naming no commit it came from.
+
+title: the version stamp names something other than the commit it was built from
+file: Makefile
+run: go test -count=1 -run TestBinaryPrintsTheCommitItWasBuiltFrom -v ./cmd/pacioli/
+--- before
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+--- after
+VERSION     ?= totally-wrong
