@@ -27,7 +27,7 @@ var (
 
 	// ErrRejected is every other refusal. Unwrap to *pgconn.PgError for the
 	// SQLSTATE and the message.
-	ErrRejected = errors.New("ledger rejected the entry")
+	ErrRejected = errors.New("the ledger refused it")
 )
 
 // A LegError says which leg of an entry the server refused. It is typed so a
@@ -75,7 +75,7 @@ const savepoint = "ledger_post"
 //
 // Post settles the balance check before it returns, so a refusal lands on this
 // call rather than at COMMIT, and runs inside a savepoint, so a refused entry
-// leaves tx usable.
+// leaves tx usable. Once is the entry point for a caller whose client retries.
 func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+savepoint); err != nil {
 		return "", fmt.Errorf("savepoint: %w", err)

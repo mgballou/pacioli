@@ -1,5 +1,5 @@
 // Package ledgerhttp serves the ledger over HTTP: accounts, balances, the trial
-// balance, and the write that posts a transaction.
+// balance, and the two writes that open an account and post a transaction.
 //
 // A read runs on a transaction opened READ ONLY. A write runs on its own, and
 // commits only if the handler got through. The wire types are this package's
@@ -81,6 +81,7 @@ func Handler(st Store, errorLog *log.Logger) http.Handler {
 	s := &server{ledger: st, errorLog: errorLog}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/accounts", s.accounts)
+	mux.HandleFunc("POST /v1/accounts", s.openAccount)
 	mux.HandleFunc("GET /v1/accounts/{code}", s.balance)
 	mux.HandleFunc("GET /v1/trial-balance", s.trial)
 	mux.HandleFunc("POST /v1/transactions", s.postTransaction)
