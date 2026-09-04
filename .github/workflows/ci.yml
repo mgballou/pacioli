@@ -14,8 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # `make build` stamps the version from `git describe`, which needs
-          # more than the default single-commit clone.
+          # `make build` stamps the version from `git describe`. With no tags
+          # in the repository a single-commit clone stamps the same short SHA,
+          # so this is for the first tag: `describe --tags` cannot name one
+          # without the history behind it.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5

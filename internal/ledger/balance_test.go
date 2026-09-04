@@ -111,7 +111,7 @@ func TestBalancesListsEveryAccountInCodeOrder(t *testing.T) {
 	tx := testdb.Tx(t)
 	seedWiderChart(t, tx)
 
-	got, err := ledger.Balances(context.Background(), tx)
+	got, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{})
 	if err != nil {
 		t.Fatalf("balances: %v", err)
 	}
@@ -125,6 +125,92 @@ func TestBalancesListsEveryAccountInCodeOrder(t *testing.T) {
 		if b.Account != want[i] {
 			t.Errorf("balance %d is %s, want %s", i, b.Account, want[i])
 		}
+	}
+}
+
+func codes(bs []ledger.Balance) []string {
+	out := make([]string, 0, len(bs))
+	for _, b := range bs {
+		out = append(out, b.Account)
+	}
+	return out
+}
+
+func TestAFilterNarrowsToOneCurrency(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	got, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{Currency: "USD"})
+	if err != nil {
+		t.Fatalf("balances: %v", err)
+	}
+	want := []string{cashUSD, customerUSD, feesUSD}
+	if !slices.Equal(codes(got), want) {
+		t.Errorf("codes = %v, want %v", codes(got), want)
+	}
+}
+
+func TestAFilterNarrowsToOneKind(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	got, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{Kind: "asset"})
+	if err != nil {
+		t.Fatalf("balances: %v", err)
+	}
+	want := []string{cash, cashUSD}
+	if !slices.Equal(codes(got), want) {
+		t.Errorf("codes = %v, want %v", codes(got), want)
+	}
+}
+
+func TestBothFiltersNarrowTogether(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	got, err := ledger.Balances(context.Background(), tx,
+		ledger.AccountFilter{Currency: "USD", Kind: "asset"})
+	if err != nil {
+		t.Fatalf("balances: %v", err)
+	}
+	if want := []string{cashUSD}; !slices.Equal(codes(got), want) {
+		t.Errorf("codes = %v, want %v", codes(got), want)
+	}
+}
+
+func TestACurrencyNoAccountHoldsIsEmptyAndNotAnError(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	got, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{Currency: "ZWL"})
+	if err != nil {
+		t.Fatalf("balances: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("balances = %+v, want none", got)
+	}
+}
+
+func TestAKindNoAccountCanHoldIsAnError(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	got, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{Kind: "liabilty"})
+	if !errors.Is(err, ledger.ErrUnknownKind) {
+		t.Fatalf("balances = %+v, err = %v, want %v", got, err, ledger.ErrUnknownKind)
+	}
+	t.Logf("%v", err)
+}
+
+func TestARefusedFilterLeavesTheTransactionUsable(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	if _, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{Kind: "liabilty"}); err == nil {
+		t.Fatal("the filter was accepted")
+	}
+	if _, err := ledger.Balances(context.Background(), tx, ledger.AccountFilter{}); err != nil {
+		t.Errorf("the transaction did not survive the refusal: %v", err)
 	}
 }
 
@@ -195,7 +281,7 @@ func TestRandomValidTransactionSetsAlwaysBalance(t *testing.T) {
 		}
 	}
 
-	balances, err := ledger.Balances(ctx, tx)
+	balances, err := ledger.Balances(ctx, tx, ledger.AccountFilter{})
 	if err != nil {
 		t.Fatalf("balances: %v", err)
 	}

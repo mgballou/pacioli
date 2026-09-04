@@ -1,0 +1,9 @@
+# Without a closed parameter set, a mistyped filter is ignored and the chart comes back.
+
+title: a mistyped query parameter is accepted and ignored
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestAnUnknownQueryParameterIsRefused -v ./internal/ledgerhttp/
+--- before
+var accountsQuery = map[string]bool{"currency": true, "kind": true}
+--- after
+var accountsQuery = map[string]bool{"currency": true, "kind": true, "curency": true}
