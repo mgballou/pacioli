@@ -8,7 +8,13 @@ LDFLAGS     := -X main.version=$(VERSION)
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@2025.1.1
 COMPOSE     := docker compose -f compose.test.yaml
 
-.PHONY: all build clean db-down db-psql db-reset db-up fmt lint negative-controls test vet
+# Loopback only, so `make run` cannot expose the lab database to the network.
+ADDR        ?= 127.0.0.1:8080
+
+# A different port for the demo, so it cannot collide with a running `make run`.
+DEMO_ADDR ?= 127.0.0.1:58080
+
+.PHONY: all build clean db-down db-psql db-reset db-up fmt lint negative-controls run test vet
 
 all: build vet lint test
 
@@ -19,6 +25,11 @@ build:
 ## test: run every test with the race detector enabled, against a live database
 test: db-up
 	go test -race ./...
+
+## run: start the database, build, and serve the ledger on $(ADDR)
+run: db-up build
+	$(BIN_DIR)/$(BINARY) serve -addr $(ADDR)
+
 ## negative-controls: apply every declared mutation and check each test turns red
 negative-controls:
 	@$(MAKE) --no-print-directory db-reset

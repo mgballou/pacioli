@@ -1,0 +1,9 @@
+# Without WithoutCancel, the shutdown deadline is expired and the drain returns at once.
+
+title: the shutdown deadline is derived from the context that was just cancelled
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestServeFinishesAnInFlightRequestAfterTheSignal -v ./cmd/pacioli/
+--- before
+context.WithoutCancel(ctx)
+--- after
+ctx
