@@ -6,7 +6,7 @@ run: go test -count=1 -run TestAnUnbalancedTransactionIsRefusedAndNothingMoves -
 --- before
 	// Ask now, not at COMMIT: deferred means the legs may arrive across statements.
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` IMMEDIATE`); err != nil {
-		return "", classify(err, -1, Leg{})
+		return "", classify(err, e, -1, Leg{})
 	}
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` DEFERRED`); err != nil {
 		return "", fmt.Errorf("re-defer the balance check: %w", err)

@@ -1,0 +1,9 @@
+# Without the set, a closed-set refusal says no and never says what it would have taken.
+
+title: a closed set is checked against and then not handed back
+file: internal/ledger/balance.go
+run: go test -count=1 -run TestTheKindRefusalOnAListCarriesTheKindAndTheKindsThereAre -v ./internal/ledgerhttp/
+--- before
+	return &UnknownKindError{Kind: kind, Valid: kinds}
+--- after
+	return &UnknownKindError{Kind: kind}

@@ -7,10 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"reflect"
 	"regexp"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/mgballou/pacioli/internal/docs"
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
@@ -40,6 +47,24 @@ type transactionRequest struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
+// value hands back what this request carried under a json field name, so a
+// refusal that names a field can hand the client its own value for it. The
+// amount comes off the leg the server named, because the body holds one per
+// posting and only the server knows which was refused.
+func (t transactionRequest) value(field string, leg *ledger.LegError) string {
+	switch field {
+	case "currency":
+		return t.Currency
+	case "description":
+		return t.Description
+	case "amount_minor":
+		if leg != nil {
+			return strconv.FormatInt(leg.AmountMinor, 10)
+		}
+	}
+	return ""
+}
+
 // net returns the sum of the legs and how many there were, so an unbalanced
 // refusal can say how far out the entry was.
 func (t transactionRequest) net() (int64, int) {
@@ -58,11 +83,15 @@ type transactionBody struct {
 	Postings    []postingBody `json:"postings"`
 }
 
-// unbalancedBody says how far out an entry was and over how many legs.
+// unbalancedBody says how far out an entry was and over how many legs. It is
+// its own type because the number a person needs here is arithmetic, not a
+// value they typed.
 type unbalancedBody struct {
 	Error    string `json:"error"`
 	NetMinor int64  `json:"net_minor"`
 	Postings int    `json:"postings"`
+	Expected string `json:"expected,omitempty"`
+	See      string `json:"see,omitempty"`
 }
 
 func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +101,8 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		s.write(w, r, http.StatusBadRequest, errorBody{
 			Error:     "this endpoint will not take a write it cannot make safe to retry",
 			Parameter: keyHeader,
+			Expected:  ledger.KeyShape,
+			See:       docs.Home,
 		})
 		return
 	}
@@ -83,7 +114,7 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 
 	var req transactionRequest
 	if err := dec.Decode(&req); err != nil {
-		s.unreadable(w, r, err)
+		s.unreadable(w, r, err, transactionFields)
 		return
 	}
 
@@ -91,7 +122,9 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 	// would post the first entry and say nothing about the second.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		s.write(w, r, http.StatusBadRequest, errorBody{
-			Error: "the request body carries more than one json value",
+			Error:    "the request body carries more than one json value",
+			Expected: "one json object, and nothing after it",
+			See:      docs.Home,
 		})
 		return
 	}
@@ -181,13 +214,15 @@ func entryBody(transaction string, e ledger.Entry) transactionBody {
 }
 
 // unreadable answers a body that could not be read as a request. The ledger was
-// never asked, so every answer here is a 400 except the one about size.
-func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error) {
+// never asked, so every answer here is a 400 except the one about size. fields
+// is the closed set the endpoint accepts, for the refusal that names none of it.
+func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error, fields []string) {
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
 		s.write(w, r, http.StatusRequestEntityTooLarge, errorBody{
-			Error: "the request body is larger than this endpoint accepts",
-			Value: fmt.Sprintf("%d bytes", tooBig.Limit),
+			Error:    "the request body is larger than this endpoint accepts",
+			Expected: fmt.Sprintf("at most %d bytes", tooBig.Limit),
+			See:      docs.Home,
 		})
 		return
 	}
@@ -198,16 +233,106 @@ func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error) {
 			Error:     "the field is not the type this endpoint takes",
 			Parameter: wrongType.Field,
 			Value:     wrongType.Value,
+			Expected:  jsonKind(wrongType.Type),
+			See:       docs.Home,
 		})
 		return
 	}
 
 	if name := unknownField(err); name != "" {
-		s.write(w, r, http.StatusBadRequest, errorBody{Error: "no such field", Parameter: name})
+		s.write(w, r, http.StatusBadRequest, errorBody{
+			Error:     "no such field",
+			Parameter: name,
+			Valid:     fields,
+			See:       docs.Home,
+		})
 		return
 	}
 
-	s.write(w, r, http.StatusBadRequest, errorBody{Error: "the request body is not json this endpoint can read"})
+	// The decoder says where it stopped, which is the one thing a client
+	// cannot work out from a body it thought was json.
+	body := errorBody{Error: "the request body is not json this endpoint can read", See: docs.Home}
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		body.Value = fmt.Sprintf("byte %d", syntax.Offset)
+	}
+	s.write(w, r, http.StatusBadRequest, body)
+}
+
+// The field names each endpoint takes, read off the wire types themselves so a
+// refusal cannot drift from what the decoder accepts. The decoder reports an
+// unknown field without saying how deep it sat, so the set is every name the
+// request can carry at any depth rather than a guess at the level.
+var (
+	transactionFields = jsonFields(reflect.TypeFor[transactionRequest]())
+	accountFields     = jsonFields(reflect.TypeFor[accountRequest]())
+)
+
+func jsonFields(t reflect.Type) []string {
+	seen := map[string]bool{}
+	var walk func(reflect.Type, map[reflect.Type]bool)
+	walk = func(t reflect.Type, done map[reflect.Type]bool) {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct || done[t] {
+			return
+		}
+		done[t] = true
+		for i := range t.NumField() {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if name == "" || name == "-" {
+				continue
+			}
+			seen[name] = true
+			walk(f.Type, done)
+		}
+	}
+	walk(t, map[reflect.Type]bool{})
+
+	out := slices.Collect(maps.Keys(seen))
+	slices.Sort(out)
+	return out
+}
+
+// jsonKind says what a field wanted in the words json uses, rather than in a Go
+// type name the client has never heard of.
+func jsonKind(t reflect.Type) string {
+	if t == reflect.TypeFor[time.Time]() {
+		return "an RFC 3339 timestamp"
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Slice, reflect.Array:
+		return "array"
+	case reflect.Struct, reflect.Map:
+		return "object"
+	}
+	return ""
+}
+
+// refusedField reads the field a check refused off the server's own constraint
+// name, which Postgres builds as <table>_<column>_check. A name that does not
+// resolve to a field the endpoint takes gives nothing back, never a guess, and
+// the name itself never reaches the client.
+func refusedField(err error, fields []string) string {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.ConstraintName == "" {
+		return ""
+	}
+	name := strings.TrimPrefix(strings.TrimSuffix(pgErr.ConstraintName, "_check"), pgErr.TableName+"_")
+	if slices.Contains(fields, name) {
+		return name
+	}
+	return ""
 }
 
 // DisallowUnknownFields reports through errors.New, so the field name is only in
@@ -233,19 +358,25 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 		named.Code = leg.Account
 	}
 
+	named.See = docs.Home
 	switch {
 	case errors.Is(err, ledger.ErrKeyReused):
+		// What the key was first used for belongs to whoever sent it first.
 		s.write(w, r, http.StatusConflict, errorBody{
 			Error:     "the idempotency key was used for a different request",
 			Parameter: keyHeader,
-			Value:     key,
+			Value:     shown(key),
+			Expected:  "a key this endpoint has not seen, or the same request it was first sent with",
+			See:       docs.Home,
 		})
 
 	case errors.Is(err, ledger.ErrBadKey):
 		s.write(w, r, http.StatusUnprocessableEntity, errorBody{
 			Error:     "the ledger will not hold that idempotency key",
 			Parameter: keyHeader,
-			Value:     key,
+			Value:     shown(key),
+			Expected:  ledger.KeyShape,
+			See:       docs.Home,
 		})
 
 	case errors.Is(err, ledger.ErrUnbalanced):
@@ -254,6 +385,8 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 			Error:    "the transaction does not balance",
 			NetMinor: sum,
 			Postings: legs,
+			Expected: "postings that net to 0; debits are positive and credits negative",
+			See:      docs.Home,
 		})
 
 	case errors.Is(err, ledger.ErrUnknownAccount):
@@ -263,13 +396,27 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 	case errors.Is(err, ledger.ErrCurrencyMismatch):
 		named.Error = "the account does not hold the transaction's currency"
 		named.Value = req.Currency
+		// One account holds one currency, so the set that account accepts is
+		// closed and has one member in it.
+		if leg != nil && leg.Holds != "" {
+			named.Valid = []string{leg.Holds}
+		}
 		s.write(w, r, http.StatusUnprocessableEntity, named)
 
 	case errors.Is(err, ledger.ErrRejected):
 		// Everything else the schema refuses. Naming the constraint would mean a
-		// copy of the schema in Go, so the server's own words go to the log.
+		// copy of the schema in Go, so the server's own words go to the log and
+		// only the field it named, and the client's own value for it, come back.
 		s.logf("POST %s: %v", r.URL.RequestURI(), err)
 		named.Error = "the ledger refused the transaction"
+		if field := refusedField(err, transactionFields); field != "" {
+			// A leg already names itself in Parameter; the field the server
+			// refused only names one where no leg was named.
+			if leg == nil {
+				named.Parameter = field
+			}
+			named.Value = req.value(field, leg)
+		}
 		s.write(w, r, http.StatusUnprocessableEntity, named)
 
 	default:

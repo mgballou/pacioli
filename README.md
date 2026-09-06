@@ -45,7 +45,29 @@ All JSON. Routing is `http.ServeMux` with the method in the pattern, so a `GET`
 on `/v1/transactions` answers 405 and carries the `Allow` header the mux worked
 out. There is no router dependency.
 
-Two rules cover every refusal.
+Three rules cover every refusal.
+
+**A refusal says what you sent, not only which rule you broke.** Every one names
+the parameter and hands back the value that broke the rule. Where the set of
+allowed values is closed, `valid` lists all of it; where it is open but shaped,
+`expected` says the shape in words. `see` is where the rule is written down.
+
+```
+$ curl -s -X POST localhost:8080/v1/accounts \
+    -d '{"code":"assets.savings","name":"Savings","kind":"assets","currency":"GBP"}'
+{
+  "error": "no such account kind",
+  "parameter": "kind",
+  "value": "assets",
+  "valid": ["asset", "liability", "equity", "revenue", "expense"],
+  "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+}
+```
+
+The closed sets are read out of Postgres at the point of failure, so a kind added
+to the schema is listed with no edit in Go. `see` is one constant in
+`internal/docs`; there is no documentation site yet, and when there is one that
+constant is the only line that changes.
 
 **A closed set gets a refusal. An open set gets an empty answer.** The five
 account kinds are closed, so `?kind=liabilty` answers 400. Currencies are open,

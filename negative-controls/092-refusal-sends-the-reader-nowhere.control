@@ -1,0 +1,9 @@
+# Without it, a refusal is a dead end: no command to run and no page to read.
+
+title: a refusal tells a reader nothing about where the rule is written down
+file: internal/docs/docs.go
+run: go test -count=1 -run TestTheQueryParameterRefusalCarriesTheParametersThereAre -v ./internal/ledgerhttp/
+--- before
+const Home = "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+--- after
+const Home = ""

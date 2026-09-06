@@ -69,20 +69,21 @@ func parseControl(path string) (control, error) {
 			case "run":
 				c.run = strings.TrimSpace(v)
 			default:
-				return control{}, fmt.Errorf("%s: unknown key %q", path, k)
+				return control{}, fmt.Errorf("%s: unknown key %q, which is not one of title, file, run",
+					path, strings.TrimSpace(k))
 			}
 		}
 	}
 	c.before, c.after = strings.TrimRight(strings.Join(before, "\n"), "\n"), strings.TrimRight(strings.Join(after, "\n"), "\n")
 	switch {
 	case c.title == "":
-		return control{}, fmt.Errorf("%s: no title", path)
+		return control{}, fmt.Errorf("%s: no `title:` — a control needs title, file, run and a `--- before` section", path)
 	case c.file == "":
-		return control{}, fmt.Errorf("%s: no file", path)
+		return control{}, fmt.Errorf("%s: no `file:` — %q names no file to mutate", path, c.title)
 	case c.run == "":
-		return control{}, fmt.Errorf("%s: no run", path)
+		return control{}, fmt.Errorf("%s: no `run:` — %q names no command that has to turn red", path, c.title)
 	case c.before == "":
-		return control{}, fmt.Errorf("%s: no `--- before` section", path)
+		return control{}, fmt.Errorf("%s: no `--- before` section — %q says nothing to replace in %s", path, c.title, c.file)
 	}
 	return c, nil
 }

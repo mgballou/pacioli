@@ -70,7 +70,8 @@ func parseServe(args []string, stderr io.Writer, getenv func(string) string) (co
 		return config{}, fmt.Errorf("%w: %w", errUsage, err)
 	}
 	if fs.NArg() > 0 {
-		return config{}, fmt.Errorf("%w: serve takes no arguments, got %q", errUsage, fs.Arg(0))
+		return config{}, fmt.Errorf("%w: serve takes no arguments, got %q. It takes the flags -addr and -dsn; run `pacioli serve -h`",
+			errUsage, fs.Arg(0))
 	}
 
 	return config{
@@ -110,7 +111,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 	// first request to a fresh container is a 500 about a missing table.
 	applied, err := schema.Apply(ctx, db)
 	if err != nil {
-		return fmt.Errorf("apply the schema: %w", err)
+		return fmt.Errorf("apply the schema to %s: %w", redacted(cfg.dsn), err)
 	}
 	if applied {
 		lg.Print("schema applied from internal/schema/0001_ledger.sql")
@@ -120,7 +121,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 
 	ln, err := net.Listen("tcp", cfg.addr)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", cfg.addr, err)
+		return fmt.Errorf("listen on %s: %w\n\nAsk for another with -addr, or $%s", cfg.addr, err, addrEnv)
 	}
 
 	return serveOn(ctx, ln, ledgerhttp.Handler(ledgerhttp.Pool{DB: db}, lg), lg)
@@ -130,7 +131,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open the database: %w", err)
+		return nil, fmt.Errorf("read %s as a connection string: %w", redacted(dsn), err)
 	}
 
 	// The default is unlimited, which can exhaust Postgres's own connection
@@ -143,7 +144,8 @@ func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("reach the database at %s: %w\n\nStart it with: make db-up", redacted(dsn), err)
+		return nil, fmt.Errorf("reach the database at %s: %w\n\nStart it with: make db-up, or point somewhere else with -dsn or $%s",
+			redacted(dsn), err, dsnEnv)
 	}
 	return db, nil
 }
@@ -175,16 +177,16 @@ func serveOn(ctx context.Context, ln net.Listener, h http.Handler, lg *log.Logge
 	select {
 	case err := <-serveErr:
 		// Serve stopped on its own, so it failed; the quiet way out is Shutdown.
-		return fmt.Errorf("serve: %w", err)
+		return fmt.Errorf("serve on %s: %w", ln.Addr(), err)
 	case <-ctx.Done():
 	}
 
 	lg.Print("signal received, finishing the requests already in flight")
 	if err := drain(ctx, srv); err != nil {
-		return fmt.Errorf("shut down: %w", err)
+		return fmt.Errorf("shut down after %s: %w", drainGrace, err)
 	}
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
+		return fmt.Errorf("serve on %s: %w", ln.Addr(), err)
 	}
 	lg.Print("stopped")
 	return nil

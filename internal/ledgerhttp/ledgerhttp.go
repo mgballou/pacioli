@@ -14,11 +14,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
+	"unicode/utf8"
 
+	"github.com/mgballou/pacioli/internal/docs"
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
@@ -126,13 +129,45 @@ type trialListBody struct {
 	Trial []trialBody `json:"trial"`
 }
 
-// errorBody is what almost every refusal looks like: the message, and whichever
-// of the account code, the offending parameter and its value the refusal has.
+// errorBody is what almost every refusal looks like. The message says the rule;
+// the rest says what was given, what would have been taken, and where the rule
+// is written down.
 type errorBody struct {
 	Error     string `json:"error"`
 	Code      string `json:"code,omitempty"`
 	Parameter string `json:"parameter,omitempty"`
-	Value     string `json:"value,omitempty"`
+
+	// Value is what the request carried under Parameter, handed straight back,
+	// or where in the body the reading of it stopped.
+	Value string `json:"value,omitempty"`
+
+	// Expected is the rule in words, for a set that is open but shaped.
+	Expected string `json:"expected,omitempty"`
+
+	// Valid is the whole set, for a set that is closed.
+	Valid []string `json:"valid,omitempty"`
+
+	// See is where the rule is written down. It is the same for every refusal.
+	See string `json:"see,omitempty"`
+}
+
+// validKinds takes the closed set off the ledger's typed error rather than out
+// of its text, and gives nothing where the refusal was not about a kind.
+func validKinds(err error) []string {
+	var unknown *ledger.UnknownKindError
+	if errors.As(err, &unknown) {
+		return unknown.Valid
+	}
+	return nil
+}
+
+// shown trims a value a client chose to something a refusal can carry back.
+func shown(s string) string {
+	const most = 80
+	if utf8.RuneCountInString(s) <= most {
+		return s
+	}
+	return string([]rune(s)[:most]) + "\u2026"
 }
 
 func (s *server) balance(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +195,11 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 	// parameters and be answered with the whole chart.
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		s.write(w, r, http.StatusBadRequest, errorBody{Error: "the query string could not be read"})
+		s.write(w, r, http.StatusBadRequest, errorBody{
+			Error: "the query string could not be read",
+			Value: shown(r.URL.RawQuery),
+			See:   docs.Home,
+		})
 		return
 	}
 
@@ -170,6 +209,8 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		s.write(w, r, http.StatusBadRequest, errorBody{
 			Error:     "no such query parameter",
 			Parameter: bad[0],
+			Valid:     queryParameters(),
+			See:       docs.Home,
 		})
 		return
 	}
@@ -193,6 +234,14 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		body.Accounts = append(body.Accounts, balanceOf(b))
 	}
 	s.write(w, r, http.StatusOK, body)
+}
+
+// queryParameters is the closed set a refusal hands back, read off the same map
+// the refusal was made from.
+func queryParameters() []string {
+	out := slices.Collect(maps.Keys(accountsQuery))
+	slices.Sort(out)
+	return out
 }
 
 // unknown returns the parameter names accountsQuery does not define, sorted so
@@ -253,12 +302,14 @@ func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 // package's sentinels rather than on message text. named carries whatever part
 // of the request is worth handing back with the refusal.
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named errorBody) {
+	named.See = docs.Home
 	switch {
 	case errors.Is(err, ledger.ErrUnknownAccount):
 		named.Error = "no such account"
 		s.write(w, r, http.StatusNotFound, named)
 		return
 	case errors.Is(err, ledger.ErrUnknownKind):
+		named.Valid = validKinds(err)
 		named.Error = "no such account kind"
 		s.write(w, r, http.StatusBadRequest, named)
 		return

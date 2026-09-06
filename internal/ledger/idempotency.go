@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -21,6 +22,11 @@ var (
 	// length lands here too.
 	ErrBadKey = errors.New("the ledger will not hold that idempotency key")
 )
+
+// KeyShape says what the schema will hold as a key, in words a client can act
+// on. The rule itself is idempotency_keys_key_shape in internal/schema; this is
+// the one place it is put into English, and every surface says it from here.
+const KeyShape = "16 to 255 printable characters, no spaces"
 
 // A Claim is a client's assertion that a write should happen at most once: the
 // key it chose, and a fingerprint of the request it sent that key with. What
@@ -83,7 +89,7 @@ func Once(ctx context.Context, tx *sql.Tx, c Claim, write func() (string, error)
 			}
 			return rec, err
 		}
-		return Record{}, badKey(err)
+		return Record{}, badKey(err, c)
 	}
 
 	id, err := write()
@@ -107,7 +113,7 @@ func Once(ctx context.Context, tx *sql.Tx, c Claim, write func() (string, error)
 		if rbErr := rollbackToOnce(ctx, tx); rbErr != nil {
 			return Record{}, errors.Join(err, rbErr)
 		}
-		return Record{}, fmt.Errorf("record the result under the key: %w", err)
+		return Record{}, fmt.Errorf("record transaction %s under key %q: %w", id, shown(c.Key), err)
 	}
 
 	// Ask now, so an unsettled key fails on this call rather than at COMMIT.
@@ -115,7 +121,7 @@ func Once(ctx context.Context, tx *sql.Tx, c Claim, write func() (string, error)
 		if rbErr := rollbackToOnce(ctx, tx); rbErr != nil {
 			return Record{}, errors.Join(err, rbErr)
 		}
-		return Record{}, fmt.Errorf("settle the key: %w", err)
+		return Record{}, fmt.Errorf("settle key %q against transaction %s: %w", shown(c.Key), id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+settledConstraint+` DEFERRED`); err != nil {
 		return Record{}, fmt.Errorf("re-defer the settled check: %w", err)
@@ -142,20 +148,22 @@ func replay(ctx context.Context, tx *sql.Tx, c Claim) (Record, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		// Unreachable while nothing deletes these rows. Expiry, when it lands,
 		// has to answer for this race.
-		return Record{}, fmt.Errorf("the key %q was taken and is already gone", c.Key)
+		return Record{}, fmt.Errorf("the key %q was taken and is already gone", shown(c.Key))
 	case err != nil:
-		return Record{}, fmt.Errorf("read the stored result: %w", err)
+		return Record{}, fmt.Errorf("read the result stored under %q: %w", shown(c.Key), err)
 	}
 
 	// Not constant time: reaching here means the client already knows the key.
 	if !bytes.Equal(hash, c.RequestHash) {
-		return Record{}, fmt.Errorf("%w: %s", ErrKeyReused, c.Key)
+		// What the key was first used for is the first caller's, not this
+		// one's, so the refusal names the key and stops there.
+		return Record{}, fmt.Errorf("%w: %q", ErrKeyReused, shown(c.Key))
 	}
 
 	if !id.Valid {
 		// The schema refuses to commit a key with no result, so this means a
 		// database that has lost that trigger.
-		return Record{}, fmt.Errorf("the key %q is stored with no transaction", c.Key)
+		return Record{}, fmt.Errorf("the key %q is stored with no transaction", shown(c.Key))
 	}
 	return Record{Key: c.Key, Transaction: id.String, Replayed: true}, nil
 }
@@ -170,7 +178,7 @@ func EntryOf(ctx context.Context, tx *sql.Tx, id string) (Entry, error) {
 	).Scan(&e.Currency, &e.Description, &e.OccurredAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return Entry{}, fmt.Errorf("no transaction %s", id)
+			return Entry{}, fmt.Errorf("no transaction %q", shown(id))
 		}
 		return Entry{}, fmt.Errorf("read transaction %s: %w", id, err)
 	}
@@ -226,11 +234,18 @@ func code(err error) string {
 
 // badKey names the refusal by the statement that raised it. The reservation
 // touches one table and carries one client value, so anything refused there is
-// the claim being wrong.
-func badKey(err error) error {
+// the claim being wrong. The two things it can be wrong about are told apart by
+// the constraint the server names: the key is the client's, the fingerprint is
+// this package's caller's.
+func badKey(err error, c Claim) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
-		return fmt.Errorf("reserve the idempotency key: %w", err)
+		return fmt.Errorf("reserve the idempotency key %q: %w", shown(c.Key), err)
 	}
-	return fmt.Errorf("%w: %w", ErrBadKey, pgErr)
+	if pgErr.ConstraintName == "idempotency_keys_key_shape" {
+		return fmt.Errorf("%w: %q is %s, and a key is %s: %w",
+			ErrBadKey, shown(c.Key), count(utf8.RuneCountInString(c.Key), "character"), KeyShape, pgErr)
+	}
+	return fmt.Errorf("%w: the key %q was reserved with a %d-byte request fingerprint: %w",
+		ErrBadKey, shown(c.Key), len(c.RequestHash), pgErr)
 }

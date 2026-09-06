@@ -33,14 +33,14 @@ func Apply(ctx context.Context, db *sql.DB) (applied bool, err error) {
 
 	var present bool
 	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('public.postings') IS NOT NULL`).Scan(&present); err != nil {
-		return false, fmt.Errorf("probe: %w", err)
+		return false, fmt.Errorf("probe for public.postings: %w", err)
 	}
 	if present {
 		return false, tx.Commit()
 	}
 
 	if _, err := tx.ExecContext(ctx, SQL); err != nil {
-		return false, fmt.Errorf("apply schema: %w", err)
+		return false, fmt.Errorf("apply 0001_ledger.sql: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit: %w", err)

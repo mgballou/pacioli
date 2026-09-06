@@ -9,6 +9,8 @@ run: make db-reset && go test -count=1 -run TestARequestWithNoIdempotencyKeyIsRe
 		s.write(w, r, http.StatusBadRequest, errorBody{
 			Error:     "this endpoint will not take a write it cannot make safe to retry",
 			Parameter: keyHeader,
+			Expected:  ledger.KeyShape,
+			See:       docs.Home,
 		})
 		return
 	}

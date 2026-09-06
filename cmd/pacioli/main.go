@@ -8,7 +8,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+
+	"github.com/mgballou/pacioli/internal/docs"
 )
 
 // version is set at link time by the Makefile.
@@ -42,19 +45,30 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil
+	// Every refusal in this program tells a reader to run this, so it answers
+	// rather than being a command that does not exist.
+	case "help", "-h", "-help", "--help":
+		fmt.Fprint(stdout, usage)
+		return nil
 	case "serve":
 		return serve(ctx, args[1:], stderr, getenv)
 	default:
 		fmt.Fprint(stderr, usage)
-		return fmt.Errorf("%w: no such command %q", errUsage, args[0])
+		return fmt.Errorf("%w: no such command %q, which is not one of %s. See %s",
+			errUsage, args[0], strings.Join(commands, ", "), docs.Home)
 	}
 }
+
+// commands is the closed set a refusal lists. It is written here rather than
+// derived from the switch above, and a test holds the two against each other.
+var commands = []string{"version", "serve", "help"}
 
 const usage = `pacioli — a double-entry ledger
 
   pacioli            print the version this binary was built from
   pacioli version    the same, said out loud
   pacioli serve      serve the ledger's read surface over HTTP
+  pacioli help       this
 
   pacioli serve -h   the flags serve takes
 `

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -25,21 +26,32 @@ var (
 	// ErrCurrencyMismatch means a leg's account holds another currency.
 	ErrCurrencyMismatch = errors.New("account currency is not the transaction currency")
 
-	// ErrRejected is every other refusal. Unwrap to *pgconn.PgError for the
-	// SQLSTATE and the message.
-	ErrRejected = errors.New("the ledger refused it")
+	// ErrRejected is every refusal this package does not name on its own. In
+	// practice that is the schema's shape rules — a code that is not a dotted
+	// lower-case path, a blank name or description, a currency that is not
+	// three capitals, a posting of zero — and the triggers that keep
+	// transactions and postings append-only. Unwrap to *pgconn.PgError for the
+	// SQLSTATE and the server's own words; the wraps below carry the values
+	// that were given.
+	ErrRejected = errors.New("a rule in the schema refused it")
 )
 
-// A LegError says which leg of an entry the server refused. It is typed so a
-// caller can name the leg without reading this package's error text.
+// A LegError says which leg of an entry the server refused, and what that leg
+// carried. It is typed so a caller can name the leg, the amount and the currency
+// the account holds without reading this package's error text.
 type LegError struct {
-	Index   int    // where the leg sat in Entry.Legs
-	Account string // the code that leg named
-	Err     error  // the refusal, wrapping the server's own *pgconn.PgError
+	Index       int    // where the leg sat in Entry.Legs
+	Account     string // the code that leg named
+	AmountMinor int64  // what that leg tried to move
+	Err         error  // the refusal, wrapping the server's own *pgconn.PgError
+
+	// Holds is the currency the account actually holds, filled in only for
+	// ErrCurrencyMismatch, where the two sides are the whole of the refusal.
+	Holds string
 }
 
 func (e *LegError) Error() string {
-	return fmt.Sprintf("leg %d (%s): %s", e.Index, e.Account, e.Err)
+	return fmt.Sprintf("leg %d (%s, %d minor units): %s", e.Index, e.Account, e.AmountMinor, e.Err)
 }
 
 // Unwrap keeps errors.Is working through a LegError.
@@ -61,6 +73,16 @@ type Entry struct {
 	// OccurredAt is when the money moved, which is not always when the row was
 	// written. Zero means now.
 	OccurredAt time.Time
+}
+
+// net returns what the legs sum to and how many there were, so a refusal can say
+// how far out an entry was rather than leaving a person to add it up.
+func (e Entry) net() (int64, int) {
+	var sum int64
+	for _, leg := range e.Legs {
+		sum += leg.AmountMinor
+	}
+	return sum, len(e.Legs)
 }
 
 // balanceConstraints names the two deferred constraint triggers. Post settles
@@ -86,7 +108,9 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT `+savepoint); rbErr != nil {
 			return "", errors.Join(err, fmt.Errorf("rollback to savepoint: %w", rbErr))
 		}
-		return "", err
+		// The savepoint is back, so the ledger can be read again and a refusal
+		// that only a second look can explain can have one.
+		return "", explain(ctx, tx, err, e)
 	}
 
 	if _, err := tx.ExecContext(ctx, `RELEASE SAVEPOINT `+savepoint); err != nil {
@@ -112,7 +136,7 @@ func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 		e.Currency, e.Description, occurredAt,
 	).Scan(&id)
 	if err != nil {
-		return "", classify(err, -1, Leg{})
+		return "", classify(err, e, -1, Leg{})
 	}
 
 	for i, leg := range e.Legs {
@@ -125,13 +149,13 @@ func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 			   LEFT JOIN accounts a ON a.code = req.code`,
 			id, leg.Account, leg.AmountMinor,
 		); err != nil {
-			return "", classify(err, i, leg)
+			return "", classify(err, e, i, leg)
 		}
 	}
 
 	// Ask now, not at COMMIT: deferred means the legs may arrive across statements.
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` IMMEDIATE`); err != nil {
-		return "", classify(err, -1, Leg{})
+		return "", classify(err, e, -1, Leg{})
 	}
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` DEFERRED`); err != nil {
 		return "", fmt.Errorf("re-defer the balance check: %w", err)
@@ -139,8 +163,9 @@ func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 	return id, nil
 }
 
-// classify turns the server's refusal into one of the errors above.
-func classify(err error, legIndex int, leg Leg) error {
+// classify turns the server's refusal into one of the errors above, carrying
+// back whatever of the entry the refusal was about.
+func classify(err error, e Entry, legIndex int, leg Leg) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		return err
@@ -148,7 +173,7 @@ func classify(err error, legIndex int, leg Leg) error {
 
 	switch {
 	case pgErr.Code == "LB001":
-		return fmt.Errorf("%w: %w", ErrUnbalanced, pgErr)
+		return unbalanced(e, pgErr)
 
 	case pgErr.Code == "23502" && pgErr.ColumnName == "account_id":
 		return legErr(legIndex, leg, ErrUnknownAccount, pgErr)
@@ -160,14 +185,82 @@ func classify(err error, legIndex int, leg Leg) error {
 	if legIndex >= 0 {
 		return legErr(legIndex, leg, ErrRejected, pgErr)
 	}
-	return fmt.Errorf("%w: %w", ErrRejected, pgErr)
+	return fmt.Errorf("%w: currency %q, description %q, over %s: %w",
+		ErrRejected, shown(e.Currency), shown(e.Description), postings(len(e.Legs)), pgErr)
 }
 
-// legErr pairs a refusal with the leg that caused it.
+// unbalanced says how far out the entry was, which is the number a person
+// otherwise works out by hand from the legs they sent.
+func unbalanced(e Entry, pgErr *pgconn.PgError) error {
+	sum, legs := e.net()
+	if legs == 0 {
+		return fmt.Errorf("%w: the entry carried no postings, and an entry needs at least two that cancel: %w",
+			ErrUnbalanced, pgErr)
+	}
+	return fmt.Errorf("%w: %s in %s net to %d minor units, want 0: %w",
+		ErrUnbalanced, postings(legs), shown(e.Currency), sum, pgErr)
+}
+
+// legErr pairs a refusal with the leg that caused it and what that leg carried.
 func legErr(index int, leg Leg, reason error, pgErr *pgconn.PgError) error {
 	return &LegError{
-		Index:   index,
-		Account: leg.Account,
-		Err:     fmt.Errorf("%w: %w", reason, pgErr),
+		Index:       index,
+		Account:     leg.Account,
+		AmountMinor: leg.AmountMinor,
+		Err:         fmt.Errorf("%w: %w", reason, pgErr),
 	}
+}
+
+// explain adds what only a second look at the ledger can say. It runs after the
+// savepoint is back, so the transaction can be read again; a read that answers
+// nothing leaves the refusal exactly as it was.
+func explain(ctx context.Context, tx *sql.Tx, err error, e Entry) error {
+	var leg *LegError
+	if !errors.As(err, &leg) || !errors.Is(err, ErrCurrencyMismatch) {
+		return err
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+
+	var held string
+	if qErr := tx.QueryRowContext(ctx,
+		`SELECT currency FROM accounts WHERE code = $1`, leg.Account,
+	).Scan(&held); qErr != nil {
+		return err
+	}
+
+	return &LegError{
+		Index:       leg.Index,
+		Account:     leg.Account,
+		AmountMinor: leg.AmountMinor,
+		Holds:       held,
+		Err: fmt.Errorf("%w: %s holds %s and the entry is in %s: %w",
+			ErrCurrencyMismatch, leg.Account, held, shown(e.Currency), pgErr),
+	}
+}
+
+// postings is "1 posting" or "3 postings", so a count reads as a sentence.
+func postings(n int) string {
+	return count(n, "posting")
+}
+
+// count is "1 posting" or "3 postings", so a number in a message never reads as
+// "1 characters".
+func count(n int, thing string) string {
+	if n == 1 {
+		return "1 " + thing
+	}
+	return fmt.Sprintf("%d %ss", n, thing)
+}
+
+// shown trims a value a client chose to something a log line can hold. Every
+// value in these messages came in over the wire, and none of it is bounded.
+func shown(s string) string {
+	const most = 80
+	if utf8.RuneCountInString(s) <= most {
+		return s
+	}
+	return string([]rune(s)[:most]) + "\u2026"
 }

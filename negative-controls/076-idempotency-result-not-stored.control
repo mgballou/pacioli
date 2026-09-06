@@ -12,7 +12,7 @@ run: go test -count=1 -run TestTheSameKeyTwiceIsAnsweredWithTheFirstResultAndWri
 		if rbErr := rollbackToOnce(ctx, tx); rbErr != nil {
 			return Record{}, errors.Join(err, rbErr)
 		}
-		return Record{}, fmt.Errorf("record the result under the key: %w", err)
+		return Record{}, fmt.Errorf("record transaction %s under key %q: %w", id, shown(c.Key), err)
 	}
 --- after
 	// negative control: the key is taken and the result is not written down

@@ -1,0 +1,14 @@
+# Without the value, a refusal states the rule and the client still cannot see what it sent.
+
+title: the refusal names the rule and drops the value that broke it
+file: internal/ledgerhttp/accounts.go
+run: go test -count=1 -run TestTheKindRefusalOnAnOpenCarriesTheKindAndTheKindsThereAre -v ./internal/ledgerhttp/
+--- before
+			Error:     "no such account kind",
+			Parameter: "kind",
+			Value:     shown(req.Kind),
+			Valid:     validKinds(err),
+--- after
+			Error:     "no such account kind",
+			Parameter: "kind",
+			Valid:     validKinds(err),

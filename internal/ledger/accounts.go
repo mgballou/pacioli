@@ -41,9 +41,12 @@ func Open(ctx context.Context, tx *sql.Tx, a Account) error {
 	)
 	if err != nil {
 		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT `+openSavepoint); rbErr != nil {
-			return errors.Join(classifyOpen(err, a), fmt.Errorf("rollback to savepoint: %w", rbErr))
+			return errors.Join(classifyOpen(err, a, refusal{}), fmt.Errorf("rollback to savepoint: %w", rbErr))
 		}
-		return classifyOpen(err, a)
+		// The savepoint is back, so the chart can be read again: a collision
+		// can say what already holds the code, and a mistyped kind can list
+		// the kinds there are.
+		return classifyOpen(err, a, secondLook(ctx, tx, err, a))
 	}
 
 	if _, err := tx.ExecContext(ctx, `RELEASE SAVEPOINT `+openSavepoint); err != nil {
@@ -52,22 +55,65 @@ func Open(ctx context.Context, tx *sql.Tx, a Account) error {
 	return nil
 }
 
+// A refusal is what a second look at the chart adds to a refused open: what
+// already holds the code that collided, and the kinds the schema has. Both are
+// empty when the read could not be made, and a message then says less rather
+// than saying something untrue.
+type refusal struct {
+	holder string
+	kinds  []string
+}
+
+// secondLook reads only what the refusal at hand can use, and only after the
+// savepoint has put the transaction back.
+func secondLook(ctx context.Context, tx *sql.Tx, err error, a Account) refusal {
+	switch code(err) {
+	case "23505":
+		return refusal{holder: holderOf(ctx, tx, a.Code)}
+	case "22P02":
+		kinds, kindsErr := accountKinds(ctx, tx)
+		if kindsErr != nil {
+			return refusal{}
+		}
+		return refusal{kinds: kinds}
+	}
+	return refusal{}
+}
+
+// holderOf describes the account already holding a code. Everything it reports
+// is served to anyone by GET /v1/accounts/{code}, so a collision is told nothing
+// it could not have asked for.
+func holderOf(ctx context.Context, tx *sql.Tx, accountCode string) string {
+	var name, kind, currency string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT name, kind::text, currency FROM accounts WHERE code = $1`, accountCode,
+	).Scan(&name, &kind, &currency); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%q (%s, %s)", shown(name), kind, currency)
+}
+
 // classifyOpen turns the server's refusal into one of this package's values,
-// with the PgError wrapped in so nothing it said is lost.
-func classifyOpen(err error, a Account) error {
+// carrying the values the caller gave and, where there is one, the set it should
+// have chosen from. The PgError is wrapped in so nothing the server said is lost.
+func classifyOpen(err error, a Account, more refusal) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
-		return fmt.Errorf("open account %q: %w", a.Code, err)
+		return fmt.Errorf("open account %q: %w", shown(a.Code), err)
 	}
 
 	switch pgErr.Code {
 	// The only unique index a client can collide with is the one on code.
 	case "23505":
-		return fmt.Errorf("%w: %q: %w", ErrAccountExists, a.Code, pgErr)
+		if more.holder == "" {
+			return fmt.Errorf("%w: %q is taken: %w", ErrAccountExists, shown(a.Code), pgErr)
+		}
+		return fmt.Errorf("%w: %q is held by %s: %w", ErrAccountExists, shown(a.Code), more.holder, pgErr)
 
 	// The enum cast, the only one on this statement.
 	case "22P02":
-		return fmt.Errorf("%w %q: %w", ErrUnknownKind, a.Kind, pgErr)
+		return &UnknownKindError{Kind: a.Kind, Valid: more.kinds, Err: pgErr}
 	}
-	return fmt.Errorf("%w: %w", ErrRejected, pgErr)
+	return fmt.Errorf("%w: code %q, name %q, kind %q, currency %q: %w",
+		ErrRejected, shown(a.Code), shown(a.Name), shown(a.Kind), shown(a.Currency), pgErr)
 }
