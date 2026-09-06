@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// A Balance is one account's position, derived from its postings. Signed the way
-// a Leg is: debit positive, credit negative.
+// A Balance is one account's position, derived from its postings and signed the
+// way a Leg is.
 type Balance struct {
 	Account     string // the account code, e.g. "assets.cash"
 	Name        string
@@ -20,8 +20,7 @@ type Balance struct {
 	Postings    int64 // how many legs have landed on this account
 }
 
-// A Trial is one currency's side totals. Per currency and never across: minor
-// units of different currencies do not add up.
+// A Trial is one currency's side totals, and never a total across currencies.
 type Trial struct {
 	Currency     string
 	DebitsMinor  int64 // sum of the positive legs
@@ -35,17 +34,15 @@ type Trial struct {
 func (t Trial) Balanced() bool { return t.NetMinor == 0 }
 
 // ErrUnknownKind means a filter, or an account being opened, named something
-// that is not an account_kind. The kinds are a closed set, so every refusal
-// carrying this sentinel is an *UnknownKindError and lists them.
+// that is not an account_kind. Every refusal carrying it is an *UnknownKindError.
 var ErrUnknownKind = errors.New("no such account kind")
 
 // An UnknownKindError names the kind that was given and the kinds the schema
-// actually holds. It is typed so a caller can hand the set on without reading
-// this package's error text, the way LegError carries the leg.
+// actually holds.
 type UnknownKindError struct {
 	Kind  string   // what was given
 	Valid []string // the kinds account_kind holds, in the order the schema declares them
-	Err   error    // the server's own refusal, where the server is what refused it
+	Err   error    // the server's own refusal
 }
 
 func (e *UnknownKindError) Error() string {
@@ -67,15 +64,13 @@ func (e *UnknownKindError) Unwrap() []error {
 	return []error{ErrUnknownKind, e.Err}
 }
 
-// An AccountFilter narrows a list of accounts. Its zero value is every account:
-// an empty field means the caller did not ask, and no account holds a blank one.
+// An AccountFilter narrows a list of accounts. Its zero value is every account.
 type AccountFilter struct {
-	// Currency is matched exactly and checked against nothing. The set is
-	// open, so a code no account holds is an empty answer, not a refusal.
+	// Currency is matched exactly; a code no account holds is an empty
+	// answer, not a refusal.
 	Currency string
 
-	// Kind is one of the account_kind values, a closed set, so a value
-	// outside it is ErrUnknownKind. The enum in Postgres is what checks.
+	// Kind is one of the account_kind values; anything else is ErrUnknownKind.
 	Kind string
 }
 
@@ -92,8 +87,7 @@ func BalanceOf(ctx context.Context, tx *sql.Tx, code string) (Balance, error) {
 	).Scan(&b.Account, &b.Name, &b.Kind, &b.Currency, &b.AmountMinor, &b.Postings)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// No valid set to offer: account codes are open, and the chart is
-		// what says which exist.
+		// No valid set to offer: account codes are an open set.
 		return Balance{}, fmt.Errorf("%w: %q", ErrUnknownAccount, shown(code))
 	case err != nil:
 		return Balance{}, fmt.Errorf("read the balance of %q: %w", shown(code), err)
@@ -102,13 +96,14 @@ func BalanceOf(ctx context.Context, tx *sql.Tx, code string) (Balance, error) {
 }
 
 // Balances returns the accounts f matches, in code order, including the ones
-// nothing has been posted to. Every filter is always bound and an unasked one
-// reads as NULL, so the statement is fixed rather than assembled from strings.
+// nothing has been posted to.
 func Balances(ctx context.Context, tx *sql.Tx, f AccountFilter) ([]Balance, error) {
 	if err := checkKind(ctx, tx, f.Kind); err != nil {
 		return nil, err
 	}
 
+	// Every filter is always bound and an unasked one reads as NULL, so the
+	// statement is fixed rather than assembled from strings.
 	rows, err := tx.QueryContext(ctx,
 		`SELECT `+balanceColumns+`
 		   FROM account_balances
@@ -134,10 +129,7 @@ func Balances(ctx context.Context, tx *sql.Tx, f AccountFilter) ([]Balance, erro
 	return out, nil
 }
 
-// checkKind asks before it filters, because casting a bad kind would raise and
-// leave the caller's transaction aborted for every read after it. It reads the
-// whole enum rather than asking whether one value is in it, so the refusal can
-// list the kinds there are.
+// checkKind refuses a kind that is not in the enum, before a filter casts to it.
 func checkKind(ctx context.Context, tx *sql.Tx, kind string) error {
 	if kind == "" {
 		return nil
@@ -152,8 +144,7 @@ func checkKind(ctx context.Context, tx *sql.Tx, kind string) error {
 	return &UnknownKindError{Kind: kind, Valid: kinds}
 }
 
-// accountKinds reads the enum out of the schema, so a kind added there is
-// accepted, and listed in a refusal, with no edit here.
+// accountKinds reads the account_kind enum out of the schema.
 func accountKinds(ctx context.Context, tx *sql.Tx) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT unnest(enum_range(NULL::account_kind))::text`)
 	if err != nil {
@@ -173,8 +164,7 @@ func accountKinds(ctx context.Context, tx *sql.Tx) ([]string, error) {
 }
 
 // TrialBalance returns the side totals for every currency the chart holds, in
-// currency order. Currencies come from accounts rather than postings, so one set
-// up and never used reports as zeroes instead of vanishing.
+// currency order, including a currency nothing has been posted in.
 func TrialBalance(ctx context.Context, tx *sql.Tx) ([]Trial, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT a.currency,

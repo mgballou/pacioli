@@ -26,8 +26,8 @@ import (
 const DSNEnv = "LEDGER_TEST_DSN"
 
 // DefaultDSN matches compose.test.yaml, on port 55432 so it cannot reach a
-// Postgres already running on this machine. It is exported so a test can hold
-// cmd/pacioli's own copy of the string against it.
+// Postgres already running on this machine. A test holds cmd/pacioli's own copy
+// of the string against it.
 const DefaultDSN = "postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable"
 
 // testDBSuffix guards against pointing the suite at a database that matters.

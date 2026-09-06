@@ -45,8 +45,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	case "version":
 		fmt.Fprintln(stdout, version)
 		return nil
-	// Every refusal in this program tells a reader to run this, so it answers
-	// rather than being a command that does not exist.
+	// Every refusal points a reader here, so it has to answer.
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
@@ -59,8 +58,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	}
 }
 
-// commands is the closed set a refusal lists. It is written here rather than
-// derived from the switch above, and a test holds the two against each other.
+// commands is the closed set a refusal lists; a test holds it against the switch.
 var commands = []string{"version", "serve", "help"}
 
 const usage = `pacioli — a double-entry ledger

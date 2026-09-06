@@ -1,9 +1,8 @@
 // Package ledgerhttp serves the ledger over HTTP: accounts, balances, the trial
 // balance, and the two writes that open an account and post a transaction.
 //
-// A read runs on a transaction opened READ ONLY. A write runs on its own, and
-// commits only if the handler got through. The wire types are this package's
-// own, so renaming a domain field breaks a compile rather than a published API.
+// The wire types are this package's own, so renaming a domain field breaks a
+// compile rather than a published API.
 package ledgerhttp
 
 import (
@@ -26,7 +25,6 @@ import (
 )
 
 // A Reader lends a read one transaction and takes it back when the read is done.
-// Pool is what a server uses; a test supplies the transaction it is already in.
 type Reader interface {
 	Read(ctx context.Context, f func(tx *sql.Tx) error) error
 }
@@ -58,8 +56,8 @@ func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
 	return f(tx)
 }
 
-// Write implements Writer. Both ways out are written out rather than deferred,
-// so exactly one of Commit and Rollback is reached on every path.
+// Write implements Writer. Exactly one of Commit and Rollback is reached on
+// every path.
 func (p Pool) Write(ctx context.Context, f func(tx *sql.Tx) error) error {
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -77,9 +75,8 @@ func (p Pool) Write(ctx context.Context, f func(tx *sql.Tx) error) error {
 	return nil
 }
 
-// Handler returns the ledger's HTTP surface over the store st lends transactions
-// on. errorLog receives what a 500 does not tell the client; nil means
-// log.Default().
+// Handler returns the ledger's HTTP surface over st. errorLog receives what a
+// 500 does not tell the client; nil means log.Default().
 func Handler(st Store, errorLog *log.Logger) http.Handler {
 	s := &server{ledger: st, errorLog: errorLog}
 	mux := http.NewServeMux()
@@ -111,8 +108,7 @@ type accountListBody struct {
 	Accounts []balanceBody `json:"accounts"`
 }
 
-// trialBody is one currency's side totals. Balanced is carried rather than left
-// for the client to derive.
+// trialBody is one currency's side totals.
 type trialBody struct {
 	Currency     string `json:"currency"`
 	DebitsMinor  int64  `json:"debits_minor"`
@@ -123,15 +119,14 @@ type trialBody struct {
 	Postings     int64  `json:"postings"`
 }
 
-// trialListBody wraps the rows in an object. A bare top-level array is a shape
-// nothing can be added to later.
+// trialListBody wraps the rows in an object, which a bare array could not be
+// added to later.
 type trialListBody struct {
 	Trial []trialBody `json:"trial"`
 }
 
-// errorBody is what almost every refusal looks like. The message says the rule;
-// the rest says what was given, what would have been taken, and where the rule
-// is written down.
+// errorBody is what almost every refusal looks like: the rule, and what was
+// given against it.
 type errorBody struct {
 	Error     string `json:"error"`
 	Code      string `json:"code,omitempty"`
@@ -151,8 +146,8 @@ type errorBody struct {
 	See string `json:"see,omitempty"`
 }
 
-// validKinds takes the closed set off the ledger's typed error rather than out
-// of its text, and gives nothing where the refusal was not about a kind.
+// validKinds takes the closed set off a *ledger.UnknownKindError, and nothing
+// off anything else.
 func validKinds(err error) []string {
 	var unknown *ledger.UnknownKindError
 	if errors.As(err, &unknown) {
@@ -203,8 +198,6 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A parameter this endpoint does not define is refused, not ignored:
-	// `?curency=GBP` answered with every account looks like an answer.
 	if bad := unknown(q); len(bad) > 0 {
 		s.write(w, r, http.StatusBadRequest, errorBody{
 			Error:     "no such query parameter",
@@ -257,8 +250,7 @@ func unknown(q url.Values) []string {
 	return out
 }
 
-// balanceOf converts a domain balance to the wire type. It is not a method on
-// ledger.Balance, so the domain keeps knowing nothing about json.
+// balanceOf converts a domain balance to the wire type.
 func balanceOf(b ledger.Balance) balanceBody {
 	return balanceBody{
 		Account:      b.Account,
@@ -298,9 +290,8 @@ func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, http.StatusOK, body)
 }
 
-// fail turns an error from internal/ledger into a status, switching on that
-// package's sentinels rather than on message text. named carries whatever part
-// of the request is worth handing back with the refusal.
+// fail turns an error from internal/ledger into a status. named carries whatever
+// part of the request is worth handing back.
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named errorBody) {
 	named.See = docs.Home
 	switch {

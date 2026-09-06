@@ -14,9 +14,8 @@ import (
 // names a kind has to list these, and this is the only copy of them in Go.
 var kinds = []string{"asset", "liability", "equity", "revenue", "expense"}
 
-// says fails unless the message carries every one of want. The point of each of
-// these tests is the same: a person reading the refusal is told what they gave,
-// not only which rule it broke.
+// says fails unless the message carries every one of want. Every test below asks
+// the same thing: a reader is told what they gave, not only which rule it broke.
 func says(t *testing.T, err error, sentinel error, want ...string) {
 	t.Helper()
 

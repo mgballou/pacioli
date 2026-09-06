@@ -1,8 +1,8 @@
 # Design
 
-Twelve decisions, each in the same shape: what it does, the obvious alternative,
-and why that alternative is wrong. The code carries almost no argument in its
-comments. This is where the argument lives.
+Fourteen decisions, each in the same shape: what it does, the obvious
+alternative, and why that alternative is wrong. The code carries almost no
+argument in its comments. This is where the argument lives.
 
 ---
 
@@ -141,6 +141,12 @@ database accepts an account in it while Go answers 400 on a valid request. The
 enum is already the definition, because it is the thing that refuses the insert.
 Reading it keeps one definition and makes a schema change enough on its own.
 
+`checkKind` asks before it filters rather than letting the cast fail. Casting a
+bad kind raises, and a raise aborts the caller's transaction, so every read after
+it answers `current transaction is aborted` instead of the refusal. It reads the
+whole enum rather than asking whether one value is in it, so the refusal can list
+the kinds there are.
+
 ## 10. 400 means the request could not be read; 422 means the ledger refused it
 
 **What it does.** Bad JSON, an undefined field, a field of the wrong type: 400,
@@ -233,3 +239,51 @@ back like every other test here.
 The seam pays a second time in production. Reads go through a `READ ONLY`
 transaction, so Postgres refuses a write on a read path whatever a later change
 to a handler does. The server enforces the rule. Nobody has to remember it.
+
+## 13. A refusal is a value, not a message to be read
+
+**What it does.** `internal/ledger` refuses with sentinels, and with two types
+that carry what the sentinel cannot. `*LegError` holds the leg's index, its
+account, its amount and the currency that account holds. `*UnknownKindError`
+holds the kind that was given and the kinds the enum has. `internal/ledgerhttp`
+picks a status with `errors.Is` and takes the closed set off the error with
+`errors.As`. It never reads the text.
+
+**The obvious alternative.** One error per package, built with `fmt.Errorf`, and
+callers that match on what it says.
+
+**Why that is wrong.** A message is written for a person, so it gets reworded —
+by a better error message, by a lint rule, by a translation. Every reword breaks
+a caller that was matching on it, and it breaks at run time, in the refusal path,
+which is the path least likely to be exercised. A type breaks at compile time
+instead. It also carries more than a sentence can: the HTTP layer hands a client
+the five kinds the enum holds without this package ever spelling them out, so the
+list in the answer and the list in the schema cannot come apart.
+
+## 14. A refusal hands back the value that broke the rule, and never the schema's own words
+
+**What it does.** Every refusal names the parameter, hands back the value the
+request carried under it, and says what would have been taken — the whole set
+where the set is closed, the rule in words where it is open. `shown` trims each
+value to 80 runes. Where the refusal is arithmetic rather than a value the client
+typed, it is the arithmetic that comes back: an unbalanced entry answers with how
+far out it was and over how many legs. The server's own message goes to the log.
+
+**The obvious alternative.** Answer with what Postgres said. It is accurate, it
+is already written, and it names the constraint.
+
+**Why that is wrong.** It names the constraint. `transactions_currency_check`
+means nothing to a client and everything to anyone reading for a way in, and
+translating it into a client-facing sentence means a copy of the schema in Go
+that can disagree with the schema. `refusedField` takes only the column name out
+of it — Postgres builds these as `<table>_<column>_check` — and gives nothing
+back when that name is not a field the endpoint takes. A guess is worse than
+silence.
+
+Handing the value back is what makes a refusal actionable. A client that sent 400
+values and gets "the ledger will not hold that account" has to bisect its own
+request. One that gets `{"parameter": "currency", "value": "gbp"}` has the answer.
+Nothing is handed back that the ledger would not serve anyway: a code collision
+is told what holds the code, and `GET /v1/accounts/{code}` serves that to anyone.
+And nothing is handed back untrimmed, because every one of these values arrived
+over the wire and none of them is bounded.

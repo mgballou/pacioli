@@ -41,9 +41,8 @@ func TestTheHelpEveryRefusalPointsAtIsACommand(t *testing.T) {
 	}
 }
 
-// commands is written out rather than read off the switch, so this holds the
-// two against each other. The context is already done, so serve reaches for the
-// database, gives up and returns rather than running.
+// The context is already done, so serve reaches for the database, gives up and
+// returns rather than running.
 func TestTheCommandsListedAreTheCommandsThatRun(t *testing.T) {
 	done, cancel := context.WithCancel(context.Background())
 	cancel()

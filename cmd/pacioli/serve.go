@@ -25,9 +25,9 @@ const (
 	// database on the network.
 	defaultAddr = "127.0.0.1:8080"
 
-	// defaultDSN is the compose database. It is written out rather than taken
-	// from internal/testdb, which imports "testing"; a test holds the two
-	// strings against each other so the copy cannot drift.
+	// defaultDSN is the compose database, written out rather than taken from
+	// internal/testdb, which imports "testing"; a test holds the two against
+	// each other.
 	defaultDSN = "postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable"
 
 	addrEnv = "LEDGER_ADDR"
@@ -97,8 +97,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 		return err
 	}
 
-	// One logger for the lifecycle lines and the causes behind a 500.
-	// Requests and their bodies are not logged.
+	// One logger for the lifecycle lines and the causes behind a 500. Requests
+	// and their bodies are not logged.
 	lg := log.New(stderr, "", log.LstdFlags)
 
 	db, err := open(ctx, cfg.dsn)
@@ -193,8 +193,8 @@ func serveOn(ctx context.Context, ln net.Listener, h http.Handler, lg *log.Logge
 }
 
 // drain closes the listener and waits for the requests already accepted, for up
-// to drainGrace. WithoutCancel because ctx is already cancelled, and a deadline
-// derived from it would expire at once and cut a request off mid-answer.
+// to drainGrace. WithoutCancel because a deadline derived from an already
+// cancelled ctx would expire at once and cut a request off mid-answer.
 func drain(ctx context.Context, srv *http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainGrace)
 	defer cancel()

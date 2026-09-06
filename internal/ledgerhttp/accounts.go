@@ -11,8 +11,7 @@ import (
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
-// accountRequest is the whole of what this endpoint accepts. The set is closed,
-// so a misspelt field is refused by name rather than dropped.
+// accountRequest is the whole of what this endpoint accepts. The set is closed.
 type accountRequest struct {
 	Code     string `json:"code"`
 	Name     string `json:"name"`
@@ -67,8 +66,7 @@ func (s *server) openAccount(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, http.StatusCreated, balanceOf(b))
 }
 
-// value hands back what this request carried under a json field name, so a
-// refusal that names a field can hand the client its own value for it.
+// value hands back what this request carried under a json field name.
 func (req accountRequest) value(field string) string {
 	switch field {
 	case "code":
@@ -83,13 +81,12 @@ func (req accountRequest) value(field string) string {
 	return ""
 }
 
-// refuseAccount turns the ledger's sentinel errors into a status, as fail and
-// refuse do.
+// refuseAccount turns the ledger's sentinel errors into a status.
 func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error, req accountRequest) {
 	switch {
 	case errors.Is(err, ledger.ErrAccountExists):
-		// Which account holds it is not put in the body: GET /v1/accounts/{code}
-		// serves that already, and pointing there says it without repeating it.
+		// Which account holds it stays out of the body; See points at what
+		// serves that.
 		s.write(w, r, http.StatusConflict, errorBody{
 			Error:     "an account already holds that code",
 			Parameter: "code",
@@ -99,8 +96,6 @@ func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error
 		})
 
 	case errors.Is(err, ledger.ErrUnknownKind):
-		// 422 rather than 400: the request was read, and the enum in the
-		// schema is what refused it.
 		s.write(w, r, http.StatusUnprocessableEntity, errorBody{
 			Error:     "no such account kind",
 			Parameter: "kind",
@@ -111,9 +106,6 @@ func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error
 
 	case errors.Is(err, ledger.ErrRejected):
 		// A bad code, a blank name, a currency that is not three capitals.
-		// Naming the constraint would mean a copy of the schema in Go, so the
-		// server's own words go to the log; the field it named, and the value
-		// the client sent for that field, come back.
 		s.logf("POST %s: %v", r.URL.RequestURI(), err)
 		body := errorBody{
 			Error: "the ledger will not hold that account",

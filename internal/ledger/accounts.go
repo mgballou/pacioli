@@ -26,15 +26,12 @@ type Account struct {
 const openSavepoint = "ledger_open"
 
 // Open adds an account to the chart. A refused open leaves nothing behind and
-// leaves tx usable: every refusal below is a raised exception, and without the
-// savepoint one mistyped kind would abort the caller's whole transaction.
+// leaves tx usable.
 func Open(ctx context.Context, tx *sql.Tx, a Account) error {
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+openSavepoint); err != nil {
 		return fmt.Errorf("savepoint: %w", err)
 	}
 
-	// The kind is cast to the enum rather than checked against a list here,
-	// so the values live in one place.
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO accounts (code, name, kind, currency) VALUES ($1, $2, $3::account_kind, $4)`,
 		a.Code, a.Name, a.Kind, a.Currency,
@@ -43,9 +40,7 @@ func Open(ctx context.Context, tx *sql.Tx, a Account) error {
 		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT `+openSavepoint); rbErr != nil {
 			return errors.Join(classifyOpen(err, a, refusal{}), fmt.Errorf("rollback to savepoint: %w", rbErr))
 		}
-		// The savepoint is back, so the chart can be read again: a collision
-		// can say what already holds the code, and a mistyped kind can list
-		// the kinds there are.
+		// The savepoint is back, so secondLook can read the chart again.
 		return classifyOpen(err, a, secondLook(ctx, tx, err, a))
 	}
 
@@ -55,10 +50,8 @@ func Open(ctx context.Context, tx *sql.Tx, a Account) error {
 	return nil
 }
 
-// A refusal is what a second look at the chart adds to a refused open: what
-// already holds the code that collided, and the kinds the schema has. Both are
-// empty when the read could not be made, and a message then says less rather
-// than saying something untrue.
+// A refusal is what a second look at the chart adds to a refused open. Both
+// fields are empty when the read could not be made.
 type refusal struct {
 	holder string
 	kinds  []string
@@ -80,9 +73,7 @@ func secondLook(ctx context.Context, tx *sql.Tx, err error, a Account) refusal {
 	return refusal{}
 }
 
-// holderOf describes the account already holding a code. Everything it reports
-// is served to anyone by GET /v1/accounts/{code}, so a collision is told nothing
-// it could not have asked for.
+// holderOf describes the account already holding a code.
 func holderOf(ctx context.Context, tx *sql.Tx, accountCode string) string {
 	var name, kind, currency string
 	if err := tx.QueryRowContext(ctx,
@@ -94,8 +85,7 @@ func holderOf(ctx context.Context, tx *sql.Tx, accountCode string) string {
 }
 
 // classifyOpen turns the server's refusal into one of this package's values,
-// carrying the values the caller gave and, where there is one, the set it should
-// have chosen from. The PgError is wrapped in so nothing the server said is lost.
+// carrying the values the caller gave and the set it should have chosen from.
 func classifyOpen(err error, a Account, more refusal) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {

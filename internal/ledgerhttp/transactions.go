@@ -37,7 +37,7 @@ type postingBody struct {
 }
 
 // transactionRequest is the whole of what this endpoint accepts. The set is
-// closed: DisallowUnknownFields below refuses anything else.
+// closed.
 type transactionRequest struct {
 	Currency    string        `json:"currency"`
 	Description string        `json:"description"`
@@ -47,10 +47,8 @@ type transactionRequest struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
-// value hands back what this request carried under a json field name, so a
-// refusal that names a field can hand the client its own value for it. The
-// amount comes off the leg the server named, because the body holds one per
-// posting and only the server knows which was refused.
+// value hands back what this request carried under a json field name. The amount
+// comes off the leg the server named, because the body holds one per posting.
 func (t transactionRequest) value(field string, leg *ledger.LegError) string {
 	switch field {
 	case "currency":
@@ -65,8 +63,7 @@ func (t transactionRequest) value(field string, leg *ledger.LegError) string {
 	return ""
 }
 
-// net returns the sum of the legs and how many there were, so an unbalanced
-// refusal can say how far out the entry was.
+// net returns the sum of the legs and how many there were.
 func (t transactionRequest) net() (int64, int) {
 	var sum int64
 	for _, p := range t.Postings {
@@ -83,9 +80,7 @@ type transactionBody struct {
 	Postings    []postingBody `json:"postings"`
 }
 
-// unbalancedBody says how far out an entry was and over how many legs. It is
-// its own type because the number a person needs here is arithmetic, not a
-// value they typed.
+// unbalancedBody says how far out an entry was and over how many legs.
 type unbalancedBody struct {
 	Error    string `json:"error"`
 	NetMinor int64  `json:"net_minor"`
@@ -168,7 +163,6 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A repeat gets the first answer, as the same 201, read back out of the ledger.
 	if rec.Replayed {
 		w.Header().Set(replayedHeader, "true")
 		s.write(w, r, http.StatusCreated, entryBody(rec.Transaction, stored))
@@ -185,8 +179,7 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 // claimOf fingerprints a request, so a key reused with a different one can be
-// told from a retry. The digest is over the decoded request re-encoded, so
-// whitespace and field order do not count.
+// told from a retry.
 func claimOf(key string, req transactionRequest) (ledger.Claim, error) {
 	canonical, err := json.Marshal(req)
 	if err != nil {
@@ -213,9 +206,8 @@ func entryBody(transaction string, e ledger.Entry) transactionBody {
 	return body
 }
 
-// unreadable answers a body that could not be read as a request. The ledger was
-// never asked, so every answer here is a 400 except the one about size. fields
-// is the closed set the endpoint accepts, for the refusal that names none of it.
+// unreadable answers a body that could not be read as a request. fields is the
+// closed set the endpoint accepts.
 func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error, fields []string) {
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
@@ -259,10 +251,9 @@ func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error, f
 	s.write(w, r, http.StatusBadRequest, body)
 }
 
-// The field names each endpoint takes, read off the wire types themselves so a
-// refusal cannot drift from what the decoder accepts. The decoder reports an
-// unknown field without saying how deep it sat, so the set is every name the
-// request can carry at any depth rather than a guess at the level.
+// The field names each endpoint takes, read off the wire types so a refusal
+// cannot drift from what the decoder accepts. The decoder does not say how deep
+// an unknown field sat, so the set is every name at any depth.
 var (
 	transactionFields = jsonFields(reflect.TypeFor[transactionRequest]())
 	accountFields     = jsonFields(reflect.TypeFor[accountRequest]())
@@ -319,10 +310,9 @@ func jsonKind(t reflect.Type) string {
 	return ""
 }
 
-// refusedField reads the field a check refused off the server's own constraint
-// name, which Postgres builds as <table>_<column>_check. A name that does not
-// resolve to a field the endpoint takes gives nothing back, never a guess, and
-// the name itself never reaches the client.
+// refusedField reads the field a check refused off the constraint name, which
+// Postgres builds as <table>_<column>_check. A name that resolves to no field
+// the endpoint takes gives nothing back.
 func refusedField(err error, fields []string) string {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.ConstraintName == "" {
@@ -336,7 +326,7 @@ func refusedField(err error, fields []string) string {
 }
 
 // DisallowUnknownFields reports through errors.New, so the field name is only in
-// the text. No match means a refusal that names no field, never a guessed one.
+// the text.
 var unknownFieldMessage = regexp.MustCompile(`^json: unknown field "(.*)"$`)
 
 func unknownField(err error) string {
@@ -347,8 +337,7 @@ func unknownField(err error) string {
 	return m[1]
 }
 
-// refuse turns the ledger's sentinel errors into a status. It switches on the
-// sentinel, never on the text of what Postgres said.
+// refuse turns the ledger's sentinel errors into a status.
 func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req transactionRequest, key string) {
 	// Which leg, where the refusal named one.
 	named := errorBody{}
@@ -396,22 +385,18 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 	case errors.Is(err, ledger.ErrCurrencyMismatch):
 		named.Error = "the account does not hold the transaction's currency"
 		named.Value = req.Currency
-		// One account holds one currency, so the set that account accepts is
-		// closed and has one member in it.
+		// One account holds one currency, so the closed set here has one member.
 		if leg != nil && leg.Holds != "" {
 			named.Valid = []string{leg.Holds}
 		}
 		s.write(w, r, http.StatusUnprocessableEntity, named)
 
 	case errors.Is(err, ledger.ErrRejected):
-		// Everything else the schema refuses. Naming the constraint would mean a
-		// copy of the schema in Go, so the server's own words go to the log and
-		// only the field it named, and the client's own value for it, come back.
+		// Everything else the schema refuses.
 		s.logf("POST %s: %v", r.URL.RequestURI(), err)
 		named.Error = "the ledger refused the transaction"
 		if field := refusedField(err, transactionFields); field != "" {
-			// A leg already names itself in Parameter; the field the server
-			// refused only names one where no leg was named.
+			// A leg already names itself in Parameter.
 			if leg == nil {
 				named.Parameter = field
 			}

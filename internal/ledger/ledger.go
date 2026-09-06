@@ -26,19 +26,13 @@ var (
 	// ErrCurrencyMismatch means a leg's account holds another currency.
 	ErrCurrencyMismatch = errors.New("account currency is not the transaction currency")
 
-	// ErrRejected is every refusal this package does not name on its own. In
-	// practice that is the schema's shape rules — a code that is not a dotted
-	// lower-case path, a blank name or description, a currency that is not
-	// three capitals, a posting of zero — and the triggers that keep
-	// transactions and postings append-only. Unwrap to *pgconn.PgError for the
-	// SQLSTATE and the server's own words; the wraps below carry the values
-	// that were given.
+	// ErrRejected is every refusal this package does not name on its own;
+	// unwrap to *pgconn.PgError for the SQLSTATE and the server's own words.
 	ErrRejected = errors.New("a rule in the schema refused it")
 )
 
 // A LegError says which leg of an entry the server refused, and what that leg
-// carried. It is typed so a caller can name the leg, the amount and the currency
-// the account holds without reading this package's error text.
+// carried.
 type LegError struct {
 	Index       int    // where the leg sat in Entry.Legs
 	Account     string // the code that leg named
@@ -46,7 +40,7 @@ type LegError struct {
 	Err         error  // the refusal, wrapping the server's own *pgconn.PgError
 
 	// Holds is the currency the account actually holds, filled in only for
-	// ErrCurrencyMismatch, where the two sides are the whole of the refusal.
+	// ErrCurrencyMismatch.
 	Holds string
 }
 
@@ -75,8 +69,7 @@ type Entry struct {
 	OccurredAt time.Time
 }
 
-// net returns what the legs sum to and how many there were, so a refusal can say
-// how far out an entry was rather than leaving a person to add it up.
+// net returns what the legs sum to and how many there were.
 func (e Entry) net() (int64, int) {
 	var sum int64
 	for _, leg := range e.Legs {
@@ -85,19 +78,15 @@ func (e Entry) net() (int64, int) {
 	return sum, len(e.Legs)
 }
 
-// balanceConstraints names the two deferred constraint triggers. Post settles
-// these and leaves the rest alone.
+// balanceConstraints names the two deferred triggers Post settles, and no others.
 const balanceConstraints = "transactions_must_balance, postings_must_balance"
 
 // savepoint is reused: a second SAVEPOINT of the same name hides the first.
 const savepoint = "ledger_post"
 
-// Post writes an entry and returns the id of the transaction it created. It
-// takes a *sql.Tx because the legs of an entry are only ever true together.
-//
-// Post settles the balance check before it returns, so a refusal lands on this
-// call rather than at COMMIT, and runs inside a savepoint, so a refused entry
-// leaves tx usable. Once is the entry point for a caller whose client retries.
+// Post writes an entry and returns the id of the transaction it created. A
+// refused entry leaves tx usable, and Once is the entry point for a caller
+// whose client retries.
 func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+savepoint); err != nil {
 		return "", fmt.Errorf("savepoint: %w", err)
@@ -108,8 +97,7 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT `+savepoint); rbErr != nil {
 			return "", errors.Join(err, fmt.Errorf("rollback to savepoint: %w", rbErr))
 		}
-		// The savepoint is back, so the ledger can be read again and a refusal
-		// that only a second look can explain can have one.
+		// The savepoint is back, so explain can read the ledger again.
 		return "", explain(ctx, tx, err, e)
 	}
 
@@ -120,8 +108,8 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 }
 
 func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
-	// An earlier SET CONSTRAINTS could have made the triggers immediate, and
-	// then the first leg of every entry would be refused on its own.
+	// An earlier SET CONSTRAINTS could have left these immediate, and then the
+	// first leg of every entry would be refused on its own.
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` DEFERRED`); err != nil {
 		return "", fmt.Errorf("defer the balance check: %w", err)
 	}
@@ -189,8 +177,7 @@ func classify(err error, e Entry, legIndex int, leg Leg) error {
 		ErrRejected, shown(e.Currency), shown(e.Description), postings(len(e.Legs)), pgErr)
 }
 
-// unbalanced says how far out the entry was, which is the number a person
-// otherwise works out by hand from the legs they sent.
+// unbalanced says how far out the entry was.
 func unbalanced(e Entry, pgErr *pgconn.PgError) error {
 	sum, legs := e.net()
 	if legs == 0 {
@@ -211,9 +198,8 @@ func legErr(index int, leg Leg, reason error, pgErr *pgconn.PgError) error {
 	}
 }
 
-// explain adds what only a second look at the ledger can say. It runs after the
-// savepoint is back, so the transaction can be read again; a read that answers
-// nothing leaves the refusal exactly as it was.
+// explain adds what only a second look at the ledger can say. A read that
+// answers nothing leaves the refusal exactly as it was.
 func explain(ctx context.Context, tx *sql.Tx, err error, e Entry) error {
 	var leg *LegError
 	if !errors.As(err, &leg) || !errors.Is(err, ErrCurrencyMismatch) {
@@ -241,13 +227,12 @@ func explain(ctx context.Context, tx *sql.Tx, err error, e Entry) error {
 	}
 }
 
-// postings is "1 posting" or "3 postings", so a count reads as a sentence.
+// postings is "1 posting" or "3 postings".
 func postings(n int) string {
 	return count(n, "posting")
 }
 
-// count is "1 posting" or "3 postings", so a number in a message never reads as
-// "1 characters".
+// count pluralizes thing, so a message never reads "1 characters".
 func count(n int, thing string) string {
 	if n == 1 {
 		return "1 " + thing
@@ -255,8 +240,7 @@ func count(n int, thing string) string {
 	return fmt.Sprintf("%d %ss", n, thing)
 }
 
-// shown trims a value a client chose to something a log line can hold. Every
-// value in these messages came in over the wire, and none of it is bounded.
+// shown trims a value a client chose to something a log line can hold.
 func shown(s string) string {
 	const most = 80
 	if utf8.RuneCountInString(s) <= most {

@@ -17,20 +17,18 @@ var (
 	// request. Nothing is written.
 	ErrKeyReused = errors.New("the idempotency key was used for a different request")
 
-	// ErrBadKey means the ledger will not hold the key as it was given.
-	// The shape is a CHECK in the schema, and a request_hash of the wrong
-	// length lands here too.
+	// ErrBadKey means the ledger will not hold the key as it was given. A
+	// request_hash of the wrong length lands here too.
 	ErrBadKey = errors.New("the ledger will not hold that idempotency key")
 )
 
-// KeyShape says what the schema will hold as a key, in words a client can act
-// on. The rule itself is idempotency_keys_key_shape in internal/schema; this is
-// the one place it is put into English, and every surface says it from here.
+// KeyShape puts idempotency_keys_key_shape, the CHECK in internal/schema, into
+// words a client can act on.
 const KeyShape = "16 to 255 printable characters, no spaces"
 
-// A Claim is a client's assertion that a write should happen at most once: the
-// key it chose, and a fingerprint of the request it sent that key with. What
-// the fingerprint covers is the calling surface's to decide.
+// A Claim is a client's assertion that a write happens at most once: the key it
+// chose, and a fingerprint of the request. What the fingerprint covers is the
+// caller's to decide.
 type Claim struct {
 	Key         string
 	RequestHash []byte
@@ -48,12 +46,10 @@ type Record struct {
 // can be undone without taking the caller's transaction with it.
 const onceSavepoint = "ledger_once"
 
-// settledConstraint names the deferred trigger that insists a committed key
-// carries a result. Once settles this one and leaves the rest alone.
+// settledConstraint names the deferred trigger Once settles, and no others.
 const settledConstraint = "idempotency_keys_must_be_settled"
 
-// Once runs write under the client's claim, at most once ever. It takes the
-// write as a function so reserving the key and doing the work cannot come apart.
+// Once runs write under the client's claim, at most once ever.
 //
 // On a key already used, write is never called and the Record carries the first
 // call's transaction. On a key used for a different request, nothing is written
@@ -64,14 +60,14 @@ func Once(ctx context.Context, tx *sql.Tx, c Claim, write func() (string, error)
 		return Record{}, fmt.Errorf("savepoint: %w", err)
 	}
 
-	// An earlier SET CONSTRAINTS could have made the trigger immediate, and the
+	// An earlier SET CONSTRAINTS could have left this immediate, and the
 	// reservation is by definition a row with no result yet.
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+settledConstraint+` DEFERRED`); err != nil {
 		return Record{}, fmt.Errorf("defer the settled check: %w", err)
 	}
 
-	// The reservation. A duplicate blocks on the primary key here until the
-	// transaction holding the key finishes, and finds out afterwards.
+	// The reservation. A duplicate blocks here on the primary key until the
+	// transaction holding the key finishes.
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO idempotency_keys (key, request_hash) VALUES ($1, $2)`,
 		c.Key, c.RequestHash,
@@ -97,14 +93,13 @@ func Once(ctx context.Context, tx *sql.Tx, c Claim, write func() (string, error)
 		if rbErr := rollbackToOnce(ctx, tx); rbErr != nil {
 			return Record{}, errors.Join(err, rbErr)
 		}
-		// The key went back with it, so the client can correct the body and
-		// retry under the same key.
+		// The key rolled back with it: the client can fix the body and
+		// retry under it.
 		return Record{}, err
 	}
 
 	// Settling the row is what makes it an answer; the schema will not let an
-	// unsettled key commit. The IS NULL narrows it to the reservation this
-	// call made.
+	// unsettled key commit. IS NULL narrows it to this call's reservation.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE idempotency_keys SET transaction_id = $2::uuid
 		  WHERE key = $1 AND transaction_id IS NULL`,
@@ -146,8 +141,8 @@ func replay(ctx context.Context, tx *sql.Tx, c Claim) (Record, error) {
 	).Scan(&id, &hash)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// Unreachable while nothing deletes these rows. Expiry, when it lands,
-		// has to answer for this race.
+		// Unreachable while nothing deletes these rows; expiry has to
+		// answer for this race.
 		return Record{}, fmt.Errorf("the key %q was taken and is already gone", shown(c.Key))
 	case err != nil:
 		return Record{}, fmt.Errorf("read the result stored under %q: %w", shown(c.Key), err)
@@ -155,21 +150,19 @@ func replay(ctx context.Context, tx *sql.Tx, c Claim) (Record, error) {
 
 	// Not constant time: reaching here means the client already knows the key.
 	if !bytes.Equal(hash, c.RequestHash) {
-		// What the key was first used for is the first caller's, not this
-		// one's, so the refusal names the key and stops there.
+		// The first request under this key is not this caller's to see.
 		return Record{}, fmt.Errorf("%w: %q", ErrKeyReused, shown(c.Key))
 	}
 
 	if !id.Valid {
-		// The schema refuses to commit a key with no result, so this means a
+		// The schema refuses to commit a key with no result, so this is a
 		// database that has lost that trigger.
 		return Record{}, fmt.Errorf("the key %q is stored with no transaction", shown(c.Key))
 	}
 	return Record{Key: c.Key, Transaction: id.String, Replayed: true}, nil
 }
 
-// EntryOf reads back the entry a transaction holds, legs in posting order, so a
-// replay is answered out of the ledger rather than from a stored copy.
+// EntryOf reads back the entry a transaction holds, legs in posting order.
 func EntryOf(ctx context.Context, tx *sql.Tx, id string) (Entry, error) {
 	var e Entry
 	err := tx.QueryRowContext(ctx,
@@ -232,11 +225,8 @@ func code(err error) string {
 	return ""
 }
 
-// badKey names the refusal by the statement that raised it. The reservation
-// touches one table and carries one client value, so anything refused there is
-// the claim being wrong. The two things it can be wrong about are told apart by
-// the constraint the server names: the key is the client's, the fingerprint is
-// this package's caller's.
+// badKey names the refusal by the constraint the server named: the key is the
+// client's, the fingerprint is its caller's.
 func badKey(err error, c Claim) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
