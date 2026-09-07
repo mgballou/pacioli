@@ -69,11 +69,12 @@ type Entry struct {
 	OccurredAt time.Time
 }
 
-// net returns what the legs sum to and how many there were.
-func (e Entry) net() (int64, int) {
-	var sum int64
+// net returns what the legs sum to and how many there were. The sum is a Minor,
+// not an int64: two legs the schema will each hold can still sum past one.
+func (e Entry) net() (Minor, int) {
+	var sum Minor
 	for _, leg := range e.Legs {
-		sum += leg.AmountMinor
+		sum = sum.Add(MinorOf(leg.AmountMinor))
 	}
 	return sum, len(e.Legs)
 }
@@ -184,7 +185,7 @@ func unbalanced(e Entry, pgErr *pgconn.PgError) error {
 		return fmt.Errorf("%w: the entry carried no postings, and an entry needs at least two that cancel: %w",
 			ErrUnbalanced, pgErr)
 	}
-	return fmt.Errorf("%w: %s in %s net to %d minor units, want 0: %w",
+	return fmt.Errorf("%w: %s in %s net to %s minor units, want 0: %w",
 		ErrUnbalanced, postings(legs), shown(e.Currency), sum, pgErr)
 }
 

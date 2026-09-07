@@ -1,0 +1,19 @@
+# Summed as an int64, the net an unbalanced entry is answered with wraps, so the
+# refusal hands the client a number the entry never carried.
+
+title: the net an unbalanced entry is refused with is computed in a type it can overflow
+file: internal/ledgerhttp/transactions.go
+run: make db-reset && go test -count=1 -run TestAnEntryThatNetsPastInt64IsRefusedWithItsArithmetic -v ./internal/ledgerhttp/
+--- before
+	var sum ledger.Minor
+	for _, p := range t.Postings {
+		sum = sum.Add(ledger.MinorOf(p.AmountMinor))
+	}
+--- after
+	// negative control: the sum is taken in the width of one leg
+	var sum ledger.Minor
+	var wrapped int64
+	for _, p := range t.Postings {
+		wrapped += p.AmountMinor
+	}
+	sum = ledger.MinorOf(wrapped)

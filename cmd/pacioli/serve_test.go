@@ -104,11 +104,13 @@ func TestServeMountsTheLedgerReadSurface(t *testing.T) {
 	base := "http://" + ln.Addr().String()
 
 	var one struct {
-		Account      string `json:"account"`
-		BalanceMinor int64  `json:"balance_minor"`
+		Account string `json:"account"`
+		// json.Number, not int64: balance_minor is a sum of postings and the
+		// wire format does not cap it at the width of one.
+		BalanceMinor json.Number `json:"balance_minor"`
 	}
 	getJSON(t, base+"/v1/accounts/"+cash, http.StatusOK, &one)
-	if one.Account != cash || one.BalanceMinor != 4500 {
+	if one.Account != cash || one.BalanceMinor != "4500" {
 		t.Errorf("GET /v1/accounts/%s gave %+v, want %s at 4500", cash, one, cash)
 	}
 
@@ -158,8 +160,8 @@ func TestServeMountsTheLedgerReadSurface(t *testing.T) {
 	}
 
 	getJSON(t, base+"/v1/accounts/"+cash, http.StatusOK, &one)
-	if one.BalanceMinor != 4000 {
-		t.Errorf("%s = %d after the refund, want 4000", cash, one.BalanceMinor)
+	if one.BalanceMinor != "4000" {
+		t.Errorf("%s = %s after the refund, want 4000", cash, one.BalanceMinor)
 	}
 
 	cancel()

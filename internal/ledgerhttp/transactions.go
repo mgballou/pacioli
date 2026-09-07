@@ -63,11 +63,14 @@ func (t transactionRequest) value(field string, leg *ledger.LegError) string {
 	return ""
 }
 
-// net returns the sum of the legs and how many there were.
-func (t transactionRequest) net() (int64, int) {
-	var sum int64
+// net returns the sum of the legs and how many there were. A ledger.Minor, not
+// an int64: an entry can carry two amounts the ledger will each hold and still
+// net past the width of one of them, and that net is the whole of the answer a
+// refusal owes.
+func (t transactionRequest) net() (ledger.Minor, int) {
+	var sum ledger.Minor
 	for _, p := range t.Postings {
-		sum += p.AmountMinor
+		sum = sum.Add(ledger.MinorOf(p.AmountMinor))
 	}
 	return sum, len(t.Postings)
 }
@@ -82,11 +85,11 @@ type transactionBody struct {
 
 // unbalancedBody says how far out an entry was and over how many legs.
 type unbalancedBody struct {
-	Error    string `json:"error"`
-	NetMinor int64  `json:"net_minor"`
-	Postings int    `json:"postings"`
-	Expected string `json:"expected,omitempty"`
-	See      string `json:"see,omitempty"`
+	Error    string       `json:"error"`
+	NetMinor ledger.Minor `json:"net_minor"`
+	Postings int          `json:"postings"`
+	Expected string       `json:"expected,omitempty"`
+	See      string       `json:"see,omitempty"`
 }
 
 func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,11 @@
+# With the balance check summing into a bigint, an entry that nets past bigint
+# raises 22003 instead of LB001, and the client is told nothing it can act on.
+
+title: an entry that nets past bigint is refused for the wrong reason
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestAnEntryWhoseLegsSumPastBigintIsRefusedForNotBalancing -v ./internal/schema/
+--- before
+    net  numeric;
+--- after
+    -- negative control: the net is capped at the width of one posting
+    net  bigint;

@@ -76,34 +76,31 @@ func printBalances(t *testing.T, tx *sql.Tx) {
 	defer rows.Close()
 
 	fmt.Printf("  %-22s %-10s %10s %9s\n", "account", "kind", "balance", "postings")
-	var debits, credits int64
+	var debits, credits ledger.Minor
 	for rows.Next() {
 		var code, kind, currency string
-		var minor, postings int64
-		if err := rows.Scan(&code, &kind, &currency, &minor, &postings); err != nil {
+		var amount ledger.Minor
+		var postings int64
+		if err := rows.Scan(&code, &kind, &currency, &amount, &postings); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if minor > 0 {
-			debits += minor
+		if amount.Sign() > 0 {
+			debits = debits.Add(amount)
 		} else {
-			credits += -minor
+			credits = credits.Add(amount.Neg())
 		}
-		fmt.Printf("  %-22s %-10s %10s %9d\n", code, kind, money(minor, currency), postings)
+		fmt.Printf("  %-22s %-10s %10s %9d\n", code, kind, money(amount, currency), postings)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-	fmt.Printf("  %-22s %10d debits, %d credits\n", "MUST BE EQUAL", debits, credits)
+	fmt.Printf("  %-22s %10s debits, %s credits\n", "MUST BE EQUAL", debits, credits)
 
-	if debits != credits {
-		t.Errorf("debits %d, credits %d — the ledger does not balance", debits, credits)
+	if !debits.Equal(credits) {
+		t.Errorf("debits %s, credits %s — the ledger does not balance", debits, credits)
 	}
 }
 
-func money(minor int64, currency string) string {
-	sign := ""
-	if minor < 0 {
-		sign, minor = "-", -minor
-	}
-	return fmt.Sprintf("%s%d.%02d %s", sign, minor/100, minor%100, currency)
+func money(m ledger.Minor, currency string) string {
+	return minor(m) + " " + currency
 }

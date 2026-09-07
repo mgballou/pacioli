@@ -16,22 +16,22 @@ type Balance struct {
 	Name        string
 	Kind        string // one of the account_kind values: asset, liability, equity, revenue, expense
 	Currency    string
-	AmountMinor int64
+	AmountMinor Minor // a sum of postings, so wider than any one of them
 	Postings    int64 // how many legs have landed on this account
 }
 
 // A Trial is one currency's side totals, and never a total across currencies.
 type Trial struct {
 	Currency     string
-	DebitsMinor  int64 // sum of the positive legs
-	CreditsMinor int64 // sum of the negative legs, as a positive number
-	NetMinor     int64 // debits minus credits; zero, or the books are wrong
+	DebitsMinor  Minor // sum of the positive legs
+	CreditsMinor Minor // sum of the negative legs, as a positive number
+	NetMinor     Minor // debits minus credits; zero, or the books are wrong
 	Accounts     int64
 	Postings     int64
 }
 
 // Balanced reports whether the two sides cancel.
-func (t Trial) Balanced() bool { return t.NetMinor == 0 }
+func (t Trial) Balanced() bool { return t.NetMinor.IsZero() }
 
 // ErrUnknownKind means a filter, or an account being opened, named something
 // that is not an account_kind. Every refusal carrying it is an *UnknownKindError.

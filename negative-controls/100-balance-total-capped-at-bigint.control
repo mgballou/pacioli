@@ -1,0 +1,11 @@
+# With the view's total cast back to bigint, a balance past int64 is a read that
+# raises 22003 and every endpoint over it answers 500, permanently.
+
+title: an account balance past bigint cannot be read back
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestABalancePastBigintIsHeldAndReadBack -v ./internal/schema/
+--- before
+           coalesce(sum(p.amount_minor), 0) AS balance_minor,
+--- after
+           -- negative control: the sum is capped at the width of one posting
+           coalesce(sum(p.amount_minor), 0)::bigint AS balance_minor,

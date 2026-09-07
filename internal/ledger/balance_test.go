@@ -39,9 +39,9 @@ func TestBalanceOfReadsBackWhatPostWrote(t *testing.T) {
 	}
 	want := ledger.Balance{
 		Account: cash, Name: "Cash at bank", Kind: "asset",
-		Currency: "GBP", AmountMinor: 4500, Postings: 1,
+		Currency: "GBP", AmountMinor: ledger.MinorOf(4500), Postings: 1,
 	}
-	if got != want {
+	if !sameBalance(got, want) {
 		t.Errorf("balance = %+v, want %+v", got, want)
 	}
 }
@@ -51,13 +51,13 @@ func TestBalanceSeesWorkTheCallerHasNotCommitted(t *testing.T) {
 	seedWiderChart(t, tx)
 
 	post(t, tx, "GBP", ledger.Leg{Account: cash, AmountMinor: 4500}, ledger.Leg{Account: customer, AmountMinor: -4500})
-	if got := amount(t, tx, cash); got != 4500 {
-		t.Fatalf("%s = %d after one uncommitted post, want 4500", cash, got)
+	if got := amount(t, tx, cash); !got.Equal(ledger.MinorOf(4500)) {
+		t.Fatalf("%s = %s after one uncommitted post, want 4500", cash, got)
 	}
 
 	post(t, tx, "GBP", ledger.Leg{Account: cash, AmountMinor: 1000}, ledger.Leg{Account: customer, AmountMinor: -1000})
-	if got := amount(t, tx, cash); got != 5500 {
-		t.Errorf("%s = %d after two uncommitted posts, want 5500", cash, got)
+	if got := amount(t, tx, cash); !got.Equal(ledger.MinorOf(5500)) {
+		t.Errorf("%s = %s after two uncommitted posts, want 5500", cash, got)
 	}
 }
 
@@ -78,8 +78,8 @@ func TestARefusedEntryDoesNotMoveABalance(t *testing.T) {
 		t.Fatalf("post: %v, want %v", err, ledger.ErrUnbalanced)
 	}
 
-	if got := amount(t, tx, cash); got != 4500 {
-		t.Errorf("%s = %d after the refusal, want 4500", cash, got)
+	if got := amount(t, tx, cash); !got.Equal(ledger.MinorOf(4500)) {
+		t.Errorf("%s = %s after the refusal, want 4500", cash, got)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestBalanceOfAnUntouchedAccountIsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("balance of %s: %v", fees, err)
 	}
-	if got.AmountMinor != 0 || got.Postings != 0 {
+	if !got.AmountMinor.IsZero() || got.Postings != 0 {
 		t.Errorf("balance = %+v, want 0 over 0 postings", got)
 	}
 }
@@ -228,14 +228,14 @@ func TestTrialBalanceIsPerCurrencyAndNeverAcross(t *testing.T) {
 	}
 
 	want := []ledger.Trial{
-		{Currency: "GBP", DebitsMinor: 4500, CreditsMinor: 4500, NetMinor: 0, Accounts: 4, Postings: 2},
-		{Currency: "USD", DebitsMinor: 3000, CreditsMinor: 3000, NetMinor: 0, Accounts: 3, Postings: 2},
+		{Currency: "GBP", DebitsMinor: ledger.MinorOf(4500), CreditsMinor: ledger.MinorOf(4500), Accounts: 4, Postings: 2},
+		{Currency: "USD", DebitsMinor: ledger.MinorOf(3000), CreditsMinor: ledger.MinorOf(3000), Accounts: 3, Postings: 2},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("%d rows, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !sameTrial(got[i], want[i]) {
 			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
@@ -271,11 +271,11 @@ func TestRandomValidTransactionSetsAlwaysBalance(t *testing.T) {
 		}
 		for _, row := range trial {
 			if !row.Balanced() {
-				t.Fatalf("after entry %d (seed %d) the %s ledger nets to %d: %+v",
+				t.Fatalf("after entry %d (seed %d) the %s ledger nets to %s: %+v",
 					n, propertySeed, row.Currency, row.NetMinor, row)
 			}
-			if row.DebitsMinor != row.CreditsMinor {
-				t.Fatalf("after entry %d (seed %d) %s has %d debits and %d credits",
+			if !row.DebitsMinor.Equal(row.CreditsMinor) {
+				t.Fatalf("after entry %d (seed %d) %s has %s debits and %s credits",
 					n, propertySeed, row.Currency, row.DebitsMinor, row.CreditsMinor)
 			}
 		}
@@ -286,8 +286,8 @@ func TestRandomValidTransactionSetsAlwaysBalance(t *testing.T) {
 		t.Fatalf("balances: %v", err)
 	}
 	for _, b := range balances {
-		if b.AmountMinor != wantAmount[b.Account] {
-			t.Errorf("%s = %d, Go made it %d", b.Account, b.AmountMinor, wantAmount[b.Account])
+		if want := ledger.MinorOf(wantAmount[b.Account]); !b.AmountMinor.Equal(want) {
+			t.Errorf("%s = %s, Go made it %s", b.Account, b.AmountMinor, want)
 		}
 		if b.Postings != wantPostings[b.Account] {
 			t.Errorf("%s has %d postings, Go generated %d", b.Account, b.Postings, wantPostings[b.Account])
@@ -355,7 +355,7 @@ func post(t *testing.T, tx *sql.Tx, currency string, legs ...ledger.Leg) {
 	}
 }
 
-func amount(t *testing.T, tx *sql.Tx, code string) int64 {
+func amount(t *testing.T, tx *sql.Tx, code string) ledger.Minor {
 	t.Helper()
 
 	b, err := ledger.BalanceOf(context.Background(), tx, code)
@@ -363,4 +363,24 @@ func amount(t *testing.T, tx *sql.Tx, code string) int64 {
 		t.Fatalf("balance of %s: %v", code, err)
 	}
 	return b.AmountMinor
+}
+
+// A ledger.Minor holds a slice, so neither a Balance nor a Trial is comparable
+// with == any more, and each field is named here instead.
+func sameBalance(a, b ledger.Balance) bool {
+	return a.Account == b.Account &&
+		a.Name == b.Name &&
+		a.Kind == b.Kind &&
+		a.Currency == b.Currency &&
+		a.Postings == b.Postings &&
+		a.AmountMinor.Equal(b.AmountMinor)
+}
+
+func sameTrial(a, b ledger.Trial) bool {
+	return a.Currency == b.Currency &&
+		a.Accounts == b.Accounts &&
+		a.Postings == b.Postings &&
+		a.DebitsMinor.Equal(b.DebitsMinor) &&
+		a.CreditsMinor.Equal(b.CreditsMinor) &&
+		a.NetMinor.Equal(b.NetMinor)
 }

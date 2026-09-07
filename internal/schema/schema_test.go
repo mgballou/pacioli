@@ -3,6 +3,7 @@ package schema_test
 import (
 	"database/sql"
 	"errors"
+	"math/big"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,14 +34,14 @@ func TestBalancedTransactionIsAccepted(t *testing.T) {
 	txnID := postTransaction(t, tx, "Customer deposit", leg{cash, 4500}, leg{customer, -4500})
 	mustSettle(t, tx)
 
-	if got := balance(t, tx, cash); got != 4500 {
-		t.Errorf("cash balance = %d, want 4500", got)
+	if got := balance(t, tx, cash); got.Cmp(big.NewInt(4500)) != 0 {
+		t.Errorf("cash balance = %s, want 4500", got)
 	}
-	if got := balance(t, tx, customer); got != -4500 {
-		t.Errorf("customer balance = %d, want -4500", got)
+	if got := balance(t, tx, customer); got.Cmp(big.NewInt(-4500)) != 0 {
+		t.Errorf("customer balance = %s, want -4500", got)
 	}
-	if got := netOf(t, tx, txnID); got != 0 {
-		t.Errorf("transaction nets to %d, want 0", got)
+	if got := netOf(t, tx, txnID); got.Sign() != 0 {
+		t.Errorf("transaction nets to %s, want 0", got)
 	}
 }
 
@@ -308,26 +309,40 @@ func mustSettle(t *testing.T, tx *sql.Tx) {
 	}
 }
 
-func balance(t *testing.T, tx *sql.Tx, accountID string) int64 {
+// balance and netOf read a sum of postings, which Postgres answers as numeric.
+// A *big.Int, not an int64: the column bounds one posting and nothing bounds
+// their sum.
+func balance(t *testing.T, tx *sql.Tx, accountID string) *big.Int {
 	t.Helper()
 
-	var n int64
+	var digits string
 	if err := tx.QueryRow(
 		`SELECT balance_minor FROM account_balances WHERE account_id = $1`, accountID,
-	).Scan(&n); err != nil {
+	).Scan(&digits); err != nil {
 		t.Fatalf("balance of %s: %v", accountID, err)
 	}
-	return n
+	return whole(t, digits)
 }
 
-func netOf(t *testing.T, tx *sql.Tx, txnID string) int64 {
+func netOf(t *testing.T, tx *sql.Tx, txnID string) *big.Int {
 	t.Helper()
 
-	var n int64
+	var digits string
 	if err := tx.QueryRow(
 		`SELECT coalesce(sum(amount_minor), 0) FROM postings WHERE transaction_id = $1`, txnID,
-	).Scan(&n); err != nil {
+	).Scan(&digits); err != nil {
 		t.Fatalf("net of %s: %v", txnID, err)
+	}
+	return whole(t, digits)
+}
+
+// whole turns a numeric the driver handed over as digits into a number.
+func whole(t *testing.T, digits string) *big.Int {
+	t.Helper()
+
+	n, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		t.Fatalf("read %q as a whole number of minor units", digits)
 	}
 	return n
 }

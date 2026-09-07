@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,8 +43,8 @@ func TestDemoBalanceTable(t *testing.T) {
 	printBalances(t, tx)
 
 	assertCode(t, err, codeUnbalanced)
-	if got := balance(t, tx, cash); got != 4500 {
-		t.Errorf("cash balance = %d, want 4500 — the rejected transaction left a mark", got)
+	if got := balance(t, tx, cash); got.Cmp(big.NewInt(4500)) != 0 {
+		t.Errorf("cash balance = %s, want 4500 — the rejected transaction left a mark", got)
 	}
 }
 
@@ -63,23 +65,24 @@ func printBalances(t *testing.T, tx *sql.Tx) {
 	defer rows.Close()
 
 	fmt.Printf("  %-22s %-10s %10s %9s\n", "account", "kind", "balance", "postings")
-	var total int64
+	total := new(big.Int)
 	for rows.Next() {
-		var code, kind, currency string
-		var minor, postings int64
-		if err := rows.Scan(&code, &kind, &currency, &minor, &postings); err != nil {
+		var code, kind, currency, digits string
+		var postings int64
+		if err := rows.Scan(&code, &kind, &currency, &digits, &postings); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		total += minor
-		fmt.Printf("  %-22s %-10s %10s %9d\n", code, kind, money(minor, currency), postings)
+		amount := whole(t, digits)
+		total.Add(total, amount)
+		fmt.Printf("  %-22s %-10s %10s %9d\n", code, kind, money(amount, currency), postings)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-	fmt.Printf("  %-22s %-10s %10d\n", "TOTAL (must be 0)", "", total)
+	fmt.Printf("  %-22s %-10s %10s\n", "TOTAL (must be 0)", "", total)
 
-	if total != 0 {
-		t.Errorf("the ledger as a whole nets to %d, want 0", total)
+	if total.Sign() != 0 {
+		t.Errorf("the ledger as a whole nets to %s, want 0", total)
 	}
 }
 
@@ -94,12 +97,18 @@ func printServerError(t *testing.T, err error) {
 	fmt.Printf("  HINT:   %s\n", pgErr.Hint)
 }
 
-func money(minor int64, currency string) string {
-	sign := ""
-	if minor < 0 {
-		sign, minor = "-", -minor
+// money prints an amount in major units, by moving the point two places along
+// the digits rather than dividing: a sum of postings is wider than int64
+// arithmetic.
+func money(m *big.Int, currency string) string {
+	digits, sign := m.String(), ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
 	}
-	return fmt.Sprintf("%s%d.%02d %s", sign, minor/100, minor%100, currency)
+	for len(digits) < 3 {
+		digits = "0" + digits
+	}
+	return sign + digits[:len(digits)-2] + "." + digits[len(digits)-2:] + " " + currency
 }
 
 func mustExec(t *testing.T, tx *sql.Tx, query string) {

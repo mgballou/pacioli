@@ -95,12 +95,12 @@ type server struct {
 
 // balanceBody is one account's position, in minor units.
 type balanceBody struct {
-	Account      string `json:"account"`
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	Currency     string `json:"currency"`
-	BalanceMinor int64  `json:"balance_minor"`
-	Postings     int64  `json:"postings"`
+	Account      string       `json:"account"`
+	Name         string       `json:"name"`
+	Kind         string       `json:"kind"`
+	Currency     string       `json:"currency"`
+	BalanceMinor ledger.Minor `json:"balance_minor"`
+	Postings     int64        `json:"postings"`
 }
 
 // accountListBody wraps the rows in an object.
@@ -110,13 +110,13 @@ type accountListBody struct {
 
 // trialBody is one currency's side totals.
 type trialBody struct {
-	Currency     string `json:"currency"`
-	DebitsMinor  int64  `json:"debits_minor"`
-	CreditsMinor int64  `json:"credits_minor"`
-	NetMinor     int64  `json:"net_minor"`
-	Balanced     bool   `json:"balanced"`
-	Accounts     int64  `json:"accounts"`
-	Postings     int64  `json:"postings"`
+	Currency     string       `json:"currency"`
+	DebitsMinor  ledger.Minor `json:"debits_minor"`
+	CreditsMinor ledger.Minor `json:"credits_minor"`
+	NetMinor     ledger.Minor `json:"net_minor"`
+	Balanced     bool         `json:"balanced"`
+	Accounts     int64        `json:"accounts"`
+	Postings     int64        `json:"postings"`
 }
 
 // trialListBody wraps the rows in an object, which a bare array could not be

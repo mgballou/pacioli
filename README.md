@@ -71,6 +71,11 @@ asking whether a transaction balances is one sum against zero. Postgres holds
 that sum in a constraint trigger deferred to the end of the transaction. No
 caller can commit an entry that does not balance.
 
+One posting is a `bigint`, so a single amount runs to ±9,223,372,036,854,775,807.
+A total of them has no ceiling: a balance, a side of the trial balance and the
+net an entry is refused with are all `numeric` in Postgres and arbitrary
+precision in Go. There is no amount the book will take and then fail to add up.
+
 The only dependency is `pgx`. Only its `database/sql` driver registration is
 imported, and every query goes through `database/sql`. There is no ORM and no
 migration framework. One hand-written SQL file is the whole schema.
@@ -272,7 +277,7 @@ The test database is Postgres 18 on `127.0.0.1:55432`, described in
 
 ## Proving the tests can fail
 
-A test that cannot fail is decoration. `negative-controls/` holds thirty declared
+A test that cannot fail is decoration. `negative-controls/` holds thirty-three declared
 mutations — remove the unique index on idempotency keys, drop the balance
 trigger, stop the server draining — each naming the test that should catch it.
 

@@ -56,7 +56,8 @@ CREATE FUNCTION assert_transaction_balances(txn_id uuid) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE
     legs bigint;
-    net  bigint;
+    -- numeric, not bigint: two legs the column will each hold can sum past one.
+    net  numeric;
 BEGIN
     SELECT count(*), coalesce(sum(amount_minor), 0)
       INTO legs, net

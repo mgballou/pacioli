@@ -30,8 +30,8 @@ func TestAnOpenedAccountIsInTheChartAtZero(t *testing.T) {
 	if b.Account != savings || b.Name != "Savings at bank" || b.Kind != "asset" || b.Currency != "GBP" {
 		t.Errorf("balance = %+v, want the account that was opened", b)
 	}
-	if b.AmountMinor != 0 || b.Postings != 0 {
-		t.Errorf("balance = %d over %d postings, want 0 over 0", b.AmountMinor, b.Postings)
+	if !b.AmountMinor.IsZero() || b.Postings != 0 {
+		t.Errorf("balance = %s over %d postings, want 0 over 0", b.AmountMinor, b.Postings)
 	}
 }
 

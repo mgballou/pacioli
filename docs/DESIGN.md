@@ -1,6 +1,6 @@
 # Design
 
-Fourteen decisions, each in the same shape: what it does, the obvious
+Fifteen decisions, each in the same shape: what it does, the obvious
 alternative, and why that alternative is wrong. The code carries almost no
 argument in its comments. This is where the argument lives.
 
@@ -287,3 +287,100 @@ Nothing is handed back that the ledger would not serve anyway: a code collision
 is told what holds the code, and `GET /v1/accounts/{code}` serves that to anyone.
 And nothing is handed back untrimmed, because every one of these values arrived
 over the wire and none of them is bounded.
+
+## 15. One posting is fixed-width; a total of postings is not
+
+**What it does.** `amount_minor` is `bigint`, so a single posting runs to
+±9,223,372,036,854,775,807 and no further. Every *total* of postings is
+`numeric`: an account balance, either side of the trial balance, and the sum the
+balance trigger takes. In Go each of those is a `ledger.Minor`, an
+arbitrary-precision integer that scans a `numeric` off the row and writes itself
+back out as a JSON number. A `Leg` stays an `int64`, because that is what one
+posting is. No float appears on either side.
+
+The trigger sums into a `numeric` as well, so an entry whose legs sum past
+`bigint` is refused for the reason it is wrong — it does not balance — and told
+by how much. Decision 14 asks that of every refusal: where the rule broken is
+arithmetic, it is the arithmetic that comes back. This was the one refusal in the
+repo that did not, because summing into a `bigint` raised a range error the
+handler could say nothing about.
+
+**The obvious alternative.** Two of them.
+
+*Refuse at write time.* Keep `int64` everywhere and check the running total
+before each posting lands, so a balance can never leave the range Go can read.
+
+*Keep `int64` and widen with a library.* An `int128` or a decimal package in the
+money path, `numeric` underneath.
+
+**Why those are wrong.** Refusing at write time is the cheaper answer and it
+does not work here, for two reasons that are worth separating.
+
+The first is that it does not cover the report that broke. A per-account ceiling
+bounds a balance, and `debits` on the trial balance is `sum(...) FILTER (WHERE
+amount_minor > 0)` — a total that only ever grows. A reversing entry adds to it.
+So the only check that would bound the trial balance is a ceiling on every
+posting ever written in a currency, which is a different and much larger claim
+than "this account holds too much".
+
+The second is the cost, measured. Against one million postings on the repo's own
+`compose.test.yaml` — tmpfs, `fsync=off`, loopback — one ordinary two-leg entry
+takes about 3.6 ms end to end. The per-account running total takes 17–27 ms and
+the per-currency debits total 28–30 ms. Both plan as a parallel sequential scan
+of the whole `postings` table, so both grow with the book and both take more
+than one backend per write. And neither is correct on its own: two writers each
+read a total under the ceiling, each write, and together cross it, so the check
+also needs a lock held for the length of the write. That is five to eight times
+the cost of the write it guards, rising, against a range nobody reaches by
+accident.
+
+A library is the same answer as `numeric` with a dependency added to the one
+path that has none. `math/big` is in the standard library, the arithmetic here is
+addition and comparison, and the driver already hands a `numeric` over as its
+digits. There is nothing left for a package to do.
+
+A ceiling that refuses would have been a legitimate answer for a ledger. What is
+not legitimate is what the code did instead: take the entry, hold the right
+number, and then fail to read it back. Postgres never lost the answer. Only the
+scan type could not hold it, and `GET /v1/trial-balance` could not be brought
+back by any entry a person could write, because the book is append-only and the
+sum only grows. The bug was that a report could not be repaired.
+
+**What this does to a book that already exists.** For the read path, nothing:
+the totals were always `numeric` and the fix is on the Go side of the wire, so a
+ledger already past the ceiling starts answering again as soon as the new binary
+runs. No migration, no rewrite, no downtime. The one schema change is the
+`numeric` in `assert_transaction_balances`, and it only improves a refusal. A
+database that already holds the schema takes it as a single statement:
+
+    CREATE OR REPLACE FUNCTION assert_transaction_balances(txn_id uuid) RETURNS void
+    LANGUAGE plpgsql AS $$
+    DECLARE
+        legs bigint;
+        -- numeric, not bigint: two legs the column will each hold can sum past one.
+        net  numeric;
+    BEGIN
+        SELECT count(*), coalesce(sum(amount_minor), 0)
+          INTO legs, net
+          FROM postings
+         WHERE transaction_id = txn_id;
+
+        IF legs = 0 THEN
+            RAISE EXCEPTION 'transaction % has no postings', txn_id
+                USING ERRCODE = 'LB001',
+                      HINT = 'A transaction needs at least two postings summing to zero.';
+        END IF;
+
+        IF net <> 0 THEN
+            RAISE EXCEPTION 'transaction % does not balance: % postings net to % (want 0)',
+                txn_id, legs, net
+                USING ERRCODE = 'LB001',
+                      HINT = 'Debits are positive, credits negative; the sides must cancel.';
+        END IF;
+    END;
+    $$;
+
+which replaces the function body and touches no row. `internal/schema` applies
+`0001_ledger.sql` only to a database that does not have it yet, so an existing
+book needs that one statement run by hand. There is no migration framework and
+this did not earn one.

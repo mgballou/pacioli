@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mgballou/pacioli/internal/ledger"
@@ -62,23 +63,28 @@ func report(t *testing.T, ctx context.Context, tx *sql.Tx) {
 	for _, row := range trial {
 		verdict := "balanced"
 		if !row.Balanced() {
-			verdict = fmt.Sprintf("OUT BY %d", row.NetMinor)
+			verdict = fmt.Sprintf("OUT BY %s", row.NetMinor)
 		}
 		fmt.Printf("  %-3s  debits %s  credits %s  %s\n",
 			row.Currency, minor(row.DebitsMinor), minor(row.CreditsMinor), verdict)
 
-		if !row.Balanced() || row.DebitsMinor != row.CreditsMinor {
+		if !row.Balanced() || !row.DebitsMinor.Equal(row.CreditsMinor) {
 			t.Errorf("%s does not balance: %+v", row.Currency, row)
 		}
 	}
 }
 
-func minor(n int64) string {
-	sign := ""
-	if n < 0 {
-		sign, n = "-", -n
+// minor prints an amount in major units, by moving the point two places along
+// the digits rather than dividing: a Minor is wider than the arithmetic.
+func minor(m ledger.Minor) string {
+	digits, sign := m.String(), ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
 	}
-	return fmt.Sprintf("%s%d.%02d", sign, n/100, n%100)
+	for len(digits) < 3 {
+		digits = "0" + digits
+	}
+	return sign + digits[:len(digits)-2] + "." + digits[len(digits)-2:]
 }
 
 func seedDemoChart(t *testing.T, tx *sql.Tx) {
