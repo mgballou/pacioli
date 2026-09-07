@@ -41,6 +41,15 @@ func TestDemoReadSurface(t *testing.T) {
 	if row := got.Trial[0]; !row.Balanced || row.DebitsMinor != row.CreditsMinor {
 		t.Errorf("%s does not balance: %+v", row.Currency, row)
 	}
+
+	// The deposit, read back by its id. Last, and only the answer that works:
+	// an id Postgres cannot cast aborts the transaction every exchange above
+	// was answered on.
+	var id string
+	if err := tx.QueryRow(`SELECT id::text FROM transactions`).Scan(&id); err != nil {
+		t.Fatalf("read the seeded transaction id: %v", err)
+	}
+	exchange(t, srv, http.MethodGet, "/v1/transactions/"+id, http.StatusOK)
 }
 
 func TestDemoAccountList(t *testing.T) {
