@@ -27,6 +27,7 @@ where the fee was typed as 15 rather than 150, and the refusal it earns.
 
 ```console
 $ curl -sS -i -X POST localhost:8080/v1/transactions \
+    -H 'Content-Type: application/json' \
     -H 'Idempotency-Key: 4f1c9a2e-deposit-0002' \
     -d '{"currency": "GBP",
          "description": "Customer deposit, less fee",
@@ -98,6 +99,16 @@ All JSON. Routing is `http.ServeMux` with the method in the pattern, so a `GET`
 on `/v1/transactions` answers 405 and carries the `Allow` header the mux worked
 out. There is no router dependency.
 
+**Both writes require `Content-Type: application/json`**, and anything else is
+415. That is the CSRF control, and it is the whole of it. A cross-origin form or
+image or `fetch` is sent without asking anybody first only while it declares one
+of three content types — form-encoded, multipart, or text/plain. Requiring JSON
+puts both writes outside that set, so a browser has to preflight, and the mux
+answers `OPTIONS` with 405. `POST /v1/transactions` was already outside it,
+because `Idempotency-Key` is a custom header, but that was an accident of the
+retry contract rather than a decision. There is no authentication; see
+`docs/DESIGN.md` for why not.
+
 Three rules cover every refusal.
 
 **A refusal says what you sent, not only which rule you broke.** Every one names
@@ -107,6 +118,7 @@ allowed values is closed, `valid` lists all of it; where it is open but shaped,
 
 ```console
 $ curl -s -X POST localhost:8080/v1/accounts \
+    -H 'Content-Type: application/json' \
     -d '{"code":"assets.savings","name":"Savings","kind":"assets","currency":"GBP"}'
 {
   "error": "no such account kind",
@@ -256,6 +268,36 @@ sent one. Nothing expires them, so the table grows forever.
 `LEDGER_ADDR` and `LEDGER_DSN` set the listen address and the connection string.
 `make run ADDR=127.0.0.1:9000` moves the port.
 
+**Loopback, in a container and out of one.** The binary defaults to
+`127.0.0.1:8080`, so running it puts nothing on the network. The image sets
+`LEDGER_ADDR=0.0.0.0:8080` instead, because a published port forwards to the
+container's network interface and cannot reach a process bound to the container's
+own loopback. The address that decides who can reach the ledger is the host side
+of the publish, and `compose.yaml` binds it to `127.0.0.1:8080`. A plain
+`docker run -p 8080:8080` publishes on every interface; write
+`-p 127.0.0.1:8080:8080` if that is not what you want.
+
+**The deadlines.** Every one is a ceiling on something a client controls, and
+each is settable by a flag or by `$LEDGER_<FLAG>` with the dashes as
+underscores:
+
+    -read-header-timeout 10s   a connection that opens and sends no headers
+    -read-timeout        30s   the whole request off the wire
+    -request-timeout     15s   the handler, and the database work behind it
+    -write-timeout       45s   the socket, once the two above have been missed
+    -idle-timeout       120s   a kept-alive connection carrying nothing
+
+A request that runs past `-request-timeout` has its database work cancelled and
+rolled back, and is answered 503 once its body has arrived; a client still
+uploading is bounded by `-read-timeout` instead, because Go will not answer a
+request it has not finished reading. A write cut off either way has written
+nothing and can be sent again under the same idempotency key. Zero is refused,
+because zero is what Go reads as no deadline at all.
+
+Every connection to Postgres carries `statement_timeout=20s`, `lock_timeout=10s`
+and `idle_in_transaction_session_timeout=30s`. Set one of those on the connection
+string to move it. The reasoning for all eight numbers is `docs/DESIGN.md` 18.
+
 The ledger is empty until something opens an account on it. There is no seed data
 anywhere in this repository. Ctrl-C stops the server, and it finishes the requests
 it has already accepted before it exits.
@@ -292,9 +334,10 @@ The test database is Postgres 18 on `127.0.0.1:55432`, described in
 
 ## Proving the tests can fail
 
-A test that cannot fail is decoration. `negative-controls/` holds thirty-three declared
+A test that cannot fail is decoration. `negative-controls/` holds forty-seven declared
 mutations — remove the unique index on idempotency keys, drop the balance
-trigger, stop the server draining — each naming the test that should catch it.
+trigger, stop the server draining, set every timeout back to zero — each naming
+the test that should catch it.
 
     make negative-controls
 

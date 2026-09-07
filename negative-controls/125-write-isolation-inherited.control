@@ -1,0 +1,10 @@
+# Read committed is what the idempotency replay needs, and inheriting it means a
+# change to the connection string can take it away without a line of Go changing.
+
+title: a write inherits its isolation level instead of naming it
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestPoolLendsAWriteAtReadCommitted -v ./internal/ledgerhttp/
+--- before
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+--- after
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})

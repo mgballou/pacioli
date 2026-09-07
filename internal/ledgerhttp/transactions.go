@@ -102,6 +102,13 @@ type unbalancedBody struct {
 }
 
 func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
+	// First, because it is what decides whether the body should have been sent
+	// at all, and because Idempotency-Key is not the thing standing between
+	// this endpoint and a browser.
+	if !s.declaredJSON(w, r) {
+		return
+	}
+
 	// Checked before the body: a write that cannot be made safe to retry is not read.
 	key := r.Header.Get(keyHeader)
 	if key == "" {
@@ -372,6 +379,8 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 
 	named.See = docs.Home
 	switch {
+	case cancelled(err):
+		s.gaveUp(w, r)
 	case errors.Is(err, ledger.ErrKeyReused):
 		// What the key was first used for belongs to whoever sent it first.
 		s.write(w, r, http.StatusConflict, errorBody{

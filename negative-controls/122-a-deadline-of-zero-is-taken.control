@@ -1,0 +1,12 @@
+# A deadline of zero taken at its word puts the server back where it started,
+# and the flag that did it would read as configuration.
+
+title: a deadline of zero is accepted instead of refused
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestADeadlineOfZeroOrLessIsRefused -v ./cmd/pacioli/
+--- before
+	if d <= 0 {
+		return 0, fmt.Errorf("a deadline of %s is no deadline at all, which is what these flags exist to end. Give a positive duration", d)
+	}
+--- after
+	_ = d

@@ -4,6 +4,6 @@ title: the read surface is never mounted and the server answers from an empty mu
 file: cmd/pacioli/serve.go
 run: go test -count=1 -run TestServeMountsTheLedgerReadSurface -v ./cmd/pacioli/
 --- before
-		Handler:           h,
+		Handler:           ledgerhttp.Deadline(d.request, h),
 --- after
-		Handler:           nil,
+		Handler:           ledgerhttp.Deadline(d.request, http.NewServeMux()),

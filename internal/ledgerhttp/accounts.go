@@ -20,6 +20,12 @@ type accountRequest struct {
 }
 
 func (s *server) openAccount(w http.ResponseWriter, r *http.Request) {
+	// Checked before the body, because it is what decides whether the body
+	// should have been sent at all.
+	if !s.declaredJSON(w, r) {
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
 	dec := json.NewDecoder(r.Body)
@@ -84,6 +90,9 @@ func (req accountRequest) value(field string) string {
 // refuseAccount turns the ledger's sentinel errors into a status.
 func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error, req accountRequest) {
 	switch {
+	case cancelled(err):
+		s.gaveUp(w, r)
+
 	case errors.Is(err, ledger.ErrAccountExists):
 		// Which account holds it stays out of the body; See points at what
 		// serves that.

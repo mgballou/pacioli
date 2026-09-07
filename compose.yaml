@@ -1,5 +1,11 @@
 # `docker compose up` serves the ledger on 127.0.0.1:8080.
 #
+# 127.0.0.1 is the host side of the publish below, and that is the address that
+# decides who can reach the ledger. Inside the container the process binds
+# 0.0.0.0, because a published port forwards to the container's network
+# interface and cannot reach a process on the container's own loopback; the
+# Dockerfile says so where it sets LEDGER_ADDR.
+#
 # The test database is compose.test.yaml, which the Makefile targets with -f.
 # That one is a tmpfs with fsync off and is thrown away every run. This one
 # keeps a volume, because a ledger you can restart is the point.

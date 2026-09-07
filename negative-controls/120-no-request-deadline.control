@@ -1,0 +1,10 @@
+# Without the request budget on the context, a handler waiting on the database is
+# never cancelled: the socket closes and the work goes on holding a connection.
+
+title: the handler is mounted bare, so nothing bounds a request
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestARequestPastItsBudgetIsRefusedOverASocket -v ./cmd/pacioli/
+--- before
+		Handler:           ledgerhttp.Deadline(d.request, h),
+--- after
+		Handler:           h,

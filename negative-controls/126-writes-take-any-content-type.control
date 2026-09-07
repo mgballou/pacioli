@@ -1,0 +1,10 @@
+# Without the content type, a write is a CORS simple request again and a page on
+# another origin can make a browser send it.
+
+title: the writes take a body under any content type
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestOpeningAnAccountNeedsAJSONContentType -v ./internal/ledgerhttp/
+--- before
+	if media, _, err := mime.ParseMediaType(declared); err == nil && media == jsonMediaType {
+--- after
+	if media, _, err := mime.ParseMediaType(declared); err == nil || media != jsonMediaType {

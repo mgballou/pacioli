@@ -1,0 +1,15 @@
+# Zero is what every one of these was, and to net/http zero is no deadline at all.
+
+title: the connection deadlines are left at zero
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestTheServerCarriesEveryConnectionDeadline -v ./cmd/pacioli/
+--- before
+		ReadHeaderTimeout: d.readHeader,
+		ReadTimeout:       d.read,
+		WriteTimeout:      d.write,
+		IdleTimeout:       d.idle,
+--- after
+		ReadHeaderTimeout: 0,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
+		IdleTimeout:       0,

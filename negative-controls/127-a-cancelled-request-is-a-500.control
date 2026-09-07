@@ -1,0 +1,14 @@
+# A request that ran out of budget, or lost the connection a cancellation poisoned,
+# is a refusal and not a fault. Answering 500 tells the client the wrong thing and
+# fills the log with causes there were none of.
+
+title: a request the ledger never got to is answered as an internal error
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestARequestWhoseContextEndedIsNotA500 -v ./internal/ledgerhttp/
+--- before
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, driver.ErrBadConn)
+--- after
+	_ = err
+	return false

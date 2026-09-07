@@ -1,0 +1,13 @@
+# Cancelling a query is a second connection and a best-effort message. Without
+# these the database has no ceiling of its own when that message does not arrive.
+
+title: the connection is opened with no statement or lock timeout
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestTheConnectionCarriesTheDatabaseCeilings -v ./cmd/pacioli/
+--- before
+	for name, value := range databaseGraces {
+		if _, given := cfg.RuntimeParams[name]; !given {
+			cfg.RuntimeParams[name] = value
+		}
+	}
+--- after

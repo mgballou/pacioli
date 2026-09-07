@@ -1,0 +1,10 @@
+# At read committed every statement takes its own snapshot, so a response built
+# from two of them can be built from two different ledgers.
+
+title: a read runs at the level it inherits instead of repeatable read
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestPoolLendsAReadAtRepeatableRead -v ./internal/ledgerhttp/
+--- before
+		Isolation: sql.LevelRepeatableRead,
+--- after
+		Isolation: sql.LevelDefault,

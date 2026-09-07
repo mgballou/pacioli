@@ -9,15 +9,18 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
+	"mime"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mgballou/pacioli/internal/docs"
@@ -46,9 +49,15 @@ type Store interface {
 type Pool struct{ DB *sql.DB }
 
 // Read implements Reader, on a transaction Postgres will not let a handler
-// write through.
+// write through. REPEATABLE READ is what makes the one-snapshot claim above
+// true: at READ COMMITTED every statement takes its own snapshot, and a
+// response built from two of them can be built from two different ledgers.
+// DESIGN.md 19.
 func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
-	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
 	if err != nil {
 		return fmt.Errorf("begin the read: %w", err)
 	}
@@ -58,8 +67,12 @@ func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
 
 // Write implements Writer. Exactly one of Commit and Rollback is reached on
 // every path.
+//
+// READ COMMITTED, and said rather than inherited: the idempotency replay reads
+// a row another transaction committed after this one began, and only a snapshot
+// taken per statement can see it. DESIGN.md 19.
 func (p Pool) Write(ctx context.Context, f func(tx *sql.Tx) error) error {
-	tx, err := p.DB.BeginTx(ctx, nil)
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin the write: %w", err)
 	}
@@ -91,6 +104,96 @@ func Handler(st Store, errorLog *log.Logger) http.Handler {
 type server struct {
 	ledger   Store
 	errorLog *log.Logger
+}
+
+// jsonMediaType is the one content type the two writes take, and requiring it
+// is what keeps a browser from being made to send one.
+//
+// A cross-origin form or img or fetch that carries no custom header and one of
+// three content types — form-encoded, multipart, text/plain — is sent without
+// asking anybody first. Requiring application/json puts every write outside
+// that set, so a browser has to preflight it, and the mux answers OPTIONS with
+// 405. POST /v1/transactions was already outside it, but only because
+// Idempotency-Key is a custom header; that is an accident of the retry
+// contract, not a control, and this is the control.
+const jsonMediaType = "application/json"
+
+// declaredJSON reports whether the request declares a json body, and refuses it
+// if not. The Content-Type is the client's, so it is handed back trimmed.
+func (s *server) declaredJSON(w http.ResponseWriter, r *http.Request) bool {
+	declared := r.Header.Get("Content-Type")
+	if media, _, err := mime.ParseMediaType(declared); err == nil && media == jsonMediaType {
+		return true
+	}
+	s.write(w, r, http.StatusUnsupportedMediaType, errorBody{
+		Error:     "this endpoint takes only a json body, and the request does not declare one",
+		Parameter: "Content-Type",
+		Value:     shown(declared),
+		Expected:  jsonMediaType,
+		See:       docs.Home,
+	})
+	return false
+}
+
+// Deadline gives every request the budget d and answers 503 when it runs out.
+// The budget goes on the request's context, so a handler waiting on the
+// database is cancelled and gives its connection back, rather than being merely
+// disconnected from a client that has already gone.
+//
+// http.TimeoutHandler throws away the header the inner handler set when it
+// fires, so the content type goes on before the request goes in, where the
+// answer and the refusal both keep it.
+func Deadline(d time.Duration, h http.Handler) http.Handler {
+	timed := http.TimeoutHandler(h, d, tookTooLong(d))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", jsonMediaType)
+		timed.ServeHTTP(w, r)
+	})
+}
+
+// cancelled reports whether an error is the request having run out of budget,
+// the client having gone away, or the pooled connection having been left unusable
+// by one of those — rather than anything the ledger refused.
+//
+// driver.ErrBadConn is here because cancelling a query is what leaves a
+// connection unusable, and database/sql hands it back only after retrying on
+// fresh ones. It means the transaction was never begun, so nothing was written
+// and nothing can have been half written.
+func cancelled(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, driver.ErrBadConn)
+}
+
+// gaveUp answers a request that never got as far as being refused. Deadline has
+// usually answered already and this body is thrown away; a handler that finishes
+// a moment before its budget instead is what this is for, and what it must not
+// be is a 500, because nothing internal went wrong and the same request sent
+// again is the right answer.
+func (s *server) gaveUp(w http.ResponseWriter, r *http.Request) {
+	s.write(w, r, http.StatusServiceUnavailable, errorBody{
+		Error:    "the ledger did not get to this request and nothing was written",
+		Expected: "the same request again; a write carries its idempotency key, so sending it twice cannot post it twice",
+		See:      docs.Home,
+	})
+}
+
+// tookTooLong is the body a request that ran out of budget is answered with,
+// in the shape every other refusal has.
+func tookTooLong(d time.Duration) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", "  ")
+	// errorBody is four strings, so this cannot fail; the check is here
+	// because dropping the error would be the thing that hides it if it did.
+	if err := enc.Encode(errorBody{
+		Error:    "the ledger did not answer in time and the request was cancelled",
+		Expected: "an answer within " + d.String(),
+		See:      docs.Home,
+	}); err != nil {
+		return `{"error":"the ledger did not answer in time and the request was cancelled"}`
+	}
+	return buf.String()
 }
 
 // balanceBody is one account's position, in minor units.
@@ -326,6 +429,9 @@ func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named errorBody) {
 	named.See = docs.Home
 	switch {
+	case cancelled(err):
+		s.gaveUp(w, r)
+		return
 	case errors.Is(err, ledger.ErrUnknownAccount):
 		named.Error = "no such account"
 		s.write(w, r, http.StatusNotFound, named)
@@ -359,7 +465,9 @@ func (s *server) write(w http.ResponseWriter, r *http.Request, status int, v any
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.WriteHeader(status)
-	if _, err := w.Write(buf.Bytes()); err != nil {
+	// ErrHandlerTimeout is Deadline having already answered this request, which
+	// is a refusal it accounted for and not a failure to log.
+	if _, err := w.Write(buf.Bytes()); err != nil && !errors.Is(err, http.ErrHandlerTimeout) {
 		s.logf("%s %s: write body: %v", r.Method, r.URL.Path, err)
 	}
 }

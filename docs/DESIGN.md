@@ -1,6 +1,6 @@
 # Design
 
-Seventeen decisions, each in the same shape: what it does, the obvious
+Nineteen decisions, each in the same shape: what it does, the obvious
 alternative, and why that alternative is wrong. The code carries almost no
 argument in its comments. This is where the argument lives.
 
@@ -487,3 +487,133 @@ one. Without the delete, an entry could be settled and then quietly unbalanced b
 an append. The row never outlives the transaction that wrote it, and the entry
 with no legs at all still has `transactions_must_balance` over it, because an
 entry with no legs queues nothing.
+
+## 18. Every deadline is a number, and none of them is zero
+
+**What it does.** The listener carries `ReadHeaderTimeout`, `ReadTimeout`,
+`WriteTimeout` and `IdleTimeout`; every request carries a budget on its context;
+and every connection to Postgres carries `statement_timeout`, `lock_timeout` and
+`idle_in_transaction_session_timeout`. Each of the five server deadlines is
+settable by a flag or by `$LEDGER_<FLAG>`, and a value of zero or less is
+refused. The three database ceilings are settable on the connection string,
+which keeps its own value where it names one.
+
+**The obvious alternative.** Leave them out. Go's zero value is no deadline, and
+`ReadHeaderTimeout` alone stops the slow-headers attack everybody has heard of.
+
+**Why that is wrong.** Every one of them is a ceiling on something a client
+controls, and there were none. A connection that opened and dribbled a body sat
+there. A connection that went quiet after one request sat there. A client that
+stopped reading left a handler blocked in `Write` forever. And a pool of sixteen
+connections, held by writers with no deadline, is a read queueing behind them for
+as long as they take: two hundred concurrent maximum-size writes put
+`GET /v1/accounts` at 7.4 s against 5 ms idle, and nothing refused anything.
+Decision 16 took the worst of that away by bounding the legs of an entry — the
+same reproduction was 80 seconds before it — but bounding the work is not the
+same as bounding the wait. None of this is an attack; it is a bad network and a
+busy afternoon.
+
+The numbers, and why each is the number it is:
+
+| deadline | value | what it bounds |
+|---|---|---|
+| `-read-header-timeout` | 10s | a connection that opens and sends no headers. The headers here are a few hundred bytes. |
+| `-read-timeout` | 30s | the whole request off the wire. The body is capped at 1 MB, so this is 1 MB at about 280 kbit/s. |
+| `-request-timeout` | 15s | the handler, and the database work behind it. |
+| `-write-timeout` | 45s | the socket, once the two above have already been missed. It is read plus request, so it can only fire as a backstop. |
+| `-idle-timeout` | 120s | a kept-alive connection carrying nothing. |
+| `statement_timeout` | 20s | one statement. Above the request budget, so the budget is the normal path and this is what holds when a cancellation does not arrive. |
+| `lock_timeout` | 10s | one lock wait. Above the slowest measured write and below the request budget. |
+| `idle_in_transaction_session_timeout` | 30s | an open transaction with nothing happening on it. Twice the request budget, so it can only fire after the budget already has. |
+
+**Fifteen seconds, and where it came from.** The slowest thing the ledger
+legitimately does is a 1,000-leg entry — the ceiling `maxPostings` sets. Sixteen
+of those at once take 0.6 s each; two hundred at once take 3.5 s each. Fifteen
+seconds is four times the worst measured, so a request that reaches it is
+queueing rather than working, and the answer it deserves is a refusal.
+
+**The budget is on the context, not only on the socket.** `WriteTimeout` closes a
+connection; it does not stop the handler behind it, and a handler waiting on
+Postgres would go on holding one connection out of sixteen for a client that has
+already gone. `ledgerhttp.Deadline` is what makes the deadline reach the
+database: it puts the budget on the request's context, the transaction is
+cancelled and rolled back, and the connection goes back to the pool.
+
+**A write cut off mid-flight writes nothing.** The reservation, the entry and the
+read-back are one transaction, so a cancelled write rolls the idempotency key
+back with it and the client can send the same request again under the same key.
+Four hundred concurrent 1,000-leg entries against a pool of sixteen: 327 taken,
+73 refused at the budget, and afterwards 327 transactions, 327,000 postings
+netting to zero, 327 keys all settled, no unbalanced entry and no leftover
+balance-check row. The deadline is a refusal, not a half-written entry.
+
+**A cancelled request is a refusal, not a fault.** `Deadline` usually answers
+first and the handler's own body is thrown away, but a handler that finishes a
+moment before its budget hands its body to the client — and under four hundred
+concurrent writes, one in four hundred did. `context.Canceled` and
+`context.DeadlineExceeded` are therefore 503 rather than the 500 every unnamed
+error gets, and they are not logged as the cause behind one, because there was
+no fault to record.
+
+`driver.ErrBadConn` is answered the same way, and it is the deadline's own
+wake. Cancelling a query is what leaves a pooled connection unusable;
+`database/sql` retries on fresh ones and hands this back only when it runs out
+of them. Under a deliberately punishing two-second budget — 342 of 400 requests
+cancelled — one request got it. It means the transaction was never begun, so
+nothing was written and the answer the client deserves is "send it again",
+which for a write is safe because the idempotency key is still free.
+
+**What the budget cannot do, and why `-read-timeout` is not redundant.** Go will
+not put a response on a connection whose request body is still arriving, and a
+handler blocked reading that body is not interrupted by its own cancelled
+context. Measured against a two-second budget and a client sending one byte every
+half second: the context was cancelled at 2.0 s, and the handler stayed inside
+the body read until the socket closed at 12.0 s. So the budget bounds the work
+and the database, and `-read-timeout` is the only thing that bounds a client that
+never finishes sending. Both are needed, and neither covers the other.
+
+**Zero is refused rather than kept.** A deadline of zero is what Go reads as no
+deadline, so a flag that took it would put the server back where it started and
+look like configuration while doing it.
+
+## 19. A read runs at repeatable read; a write runs at read committed
+
+**What it does.** `Pool.Read` begins `REPEATABLE READ READ ONLY`. `Pool.Write`
+begins `READ COMMITTED`, said out loud rather than inherited from the connection.
+
+**The obvious alternative.** Set neither and take what the connection gives,
+which is read committed for both. That is what it did.
+
+**Why that is wrong, for the read.** `Pool.Read` says a response built from two
+statements is built from one snapshot of the ledger, and at read committed that
+is not true: every statement takes its own snapshot. `Balances` is two statements
+— it reads the `account_kind` enum, then the balances — and a write landing
+between them is a response half from one ledger and half from another. Repeatable
+read is what makes the claim the comment already made.
+
+**Why that is wrong, for the write.** The write is the interesting one, because
+the level it needs is the weaker of the two and nothing said so. The idempotency
+replay reads a row that another transaction committed *after* this one began: a
+duplicate key blocks on the primary key, the holder commits, this one is refused
+with 23505, and only then does it read back the result to replay. At repeatable
+read that read comes back empty — the snapshot was taken before the other
+transaction committed — and every duplicate would be answered with a 500 saying
+the key was taken and is already gone. Measured against Postgres 18.6, the
+container in `compose.test.yaml`:
+
+| level | the duplicate insert | the read back |
+|---|---|---|
+| read committed | 23505 | the first call's row |
+| repeatable read | 23505 | **0 rows** |
+
+So the retry contract, which is the point of the endpoint, depends on read
+committed. It now says so, and a control turns the tests red if it stops saying
+so.
+
+**What the deferred balance check depends on, and it is not the level.** The
+check sums the postings of one transaction id from inside the transaction that
+wrote them, so it needs to see its own uncommitted writes and nothing else — true
+at every isolation level Postgres offers. Nothing else can add legs to that
+entry: the id is generated inside the writing transaction and never leaves it
+before commit, and postings are append-only. The balance rule is safe at any
+level. The retry contract is not.

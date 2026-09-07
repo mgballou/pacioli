@@ -38,7 +38,7 @@ func TestServeFinishesAnInFlightRequestAfterTheSignal(t *testing.T) {
 	defer cancel()
 
 	served := make(chan error, 1)
-	go func() { served <- serveOn(ctx, ln, handler, quiet()) }()
+	go func() { served <- serveOn(ctx, ln, handler, defaultDeadlines(), quiet()) }()
 
 	type answer struct {
 		body string
@@ -98,7 +98,7 @@ func TestServeMountsTheLedgerReadSurface(t *testing.T) {
 
 	served := make(chan error, 1)
 	go func() {
-		served <- serveOn(ctx, ln, ledgerhttp.Handler(txStore{tx}, quiet()), quiet())
+		served <- serveOn(ctx, ln, ledgerhttp.Handler(txStore{tx}, quiet()), defaultDeadlines(), quiet())
 	}()
 
 	base := "http://" + ln.Addr().String()
@@ -188,24 +188,24 @@ func TestTheListenAddressComesFromTheFlagThenTheEnvironment(t *testing.T) {
 	}{
 		{
 			name: "neither: the defaults, and they are loopback and compose",
-			want: config{addr: defaultAddr, dsn: defaultDSN},
+			want: config{addr: defaultAddr, dsn: defaultDSN, deadlines: defaultDeadlines()},
 		},
 		{
 			name: "the environment alone",
 			env:  map[string]string{addrEnv: "127.0.0.1:9999", dsnEnv: "postgres://elsewhere/x_test"},
-			want: config{addr: "127.0.0.1:9999", dsn: "postgres://elsewhere/x_test"},
+			want: config{addr: "127.0.0.1:9999", dsn: "postgres://elsewhere/x_test", deadlines: defaultDeadlines()},
 		},
 		{
 			name: "the flag beats the environment",
 			args: []string{"-addr", "127.0.0.1:1234", "-dsn", "postgres://flagged/x_test"},
 			env:  map[string]string{addrEnv: "127.0.0.1:9999", dsnEnv: "postgres://elsewhere/x_test"},
-			want: config{addr: "127.0.0.1:1234", dsn: "postgres://flagged/x_test"},
+			want: config{addr: "127.0.0.1:1234", dsn: "postgres://flagged/x_test", deadlines: defaultDeadlines()},
 		},
 		{
 			name: "one flag does not take the other's environment away",
 			args: []string{"-addr", "127.0.0.1:1234"},
 			env:  map[string]string{dsnEnv: "postgres://elsewhere/x_test"},
-			want: config{addr: "127.0.0.1:1234", dsn: "postgres://elsewhere/x_test"},
+			want: config{addr: "127.0.0.1:1234", dsn: "postgres://elsewhere/x_test", deadlines: defaultDeadlines()},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
