@@ -284,8 +284,10 @@ func TestAFieldThisEndpointDoesNotDefineInsideAPostingIsRefused(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", body, err)
 	}
-	if got.Parameter != "amount" {
-		t.Errorf("the refusal named %q, want amount", got.Parameter)
+	// The leg is named as well as the field: the decoder reads a posting at a
+	// time, so it knows which one carried the name.
+	if got.Parameter != "postings[0].amount" {
+		t.Errorf("the refusal named %q, want postings[0].amount", got.Parameter)
 	}
 }
 
@@ -305,7 +307,9 @@ func TestAFieldOfTheWrongTypeIsRefused(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", body, err)
 	}
-	if got.Parameter != "postings.amount_minor" || got.Value != "string" {
+	// The quotes are the half of the answer that matters: without them the
+	// value reads as the number this endpoint would have taken.
+	if got.Parameter != "postings[0].amount_minor" || got.Value != `"-500"` {
 		t.Errorf("body = %+v, want the field and what it held", got)
 	}
 }

@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"reflect"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -121,25 +119,8 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-
 	var req transactionRequest
-	if err := dec.Decode(&req); err != nil {
-		s.unreadable(w, r, err, transactionFields)
-		return
-	}
-
-	// The decoder stops at the first json value, so without this `{...}{...}`
-	// would post the first entry and say nothing about the second.
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		s.write(w, r, http.StatusBadRequest, errorBody{
-			Error:    "the request body carries more than one json value",
-			Expected: "one json object, and nothing after it",
-			See:      docs.Home,
-		})
+	if !s.decode(w, r, &req) {
 		return
 	}
 
@@ -263,54 +244,10 @@ func entryBody(transaction string, e ledger.Entry) transactionBody {
 	return body
 }
 
-// unreadable answers a body that could not be read as a request. fields is the
-// closed set the endpoint accepts.
-func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error, fields []string) {
-	var tooBig *http.MaxBytesError
-	if errors.As(err, &tooBig) {
-		s.write(w, r, http.StatusRequestEntityTooLarge, errorBody{
-			Error:    "the request body is larger than this endpoint accepts",
-			Expected: fmt.Sprintf("at most %d bytes", tooBig.Limit),
-			See:      docs.Home,
-		})
-		return
-	}
-
-	var wrongType *json.UnmarshalTypeError
-	if errors.As(err, &wrongType) && wrongType.Field != "" {
-		s.write(w, r, http.StatusBadRequest, errorBody{
-			Error:     "the field is not the type this endpoint takes",
-			Parameter: wrongType.Field,
-			Value:     jsonValue(wrongType.Value),
-			Expected:  wants(wrongType.Field, wrongType.Type),
-			See:       docs.Home,
-		})
-		return
-	}
-
-	if name := unknownField(err); name != "" {
-		s.write(w, r, http.StatusBadRequest, errorBody{
-			Error:     "no such field",
-			Parameter: name,
-			Valid:     fields,
-			See:       docs.Home,
-		})
-		return
-	}
-
-	// The decoder says where it stopped, which is the one thing a client
-	// cannot work out from a body it thought was json.
-	body := errorBody{Error: "the request body is not json this endpoint can read", See: docs.Home}
-	var syntax *json.SyntaxError
-	if errors.As(err, &syntax) {
-		body.Value = fmt.Sprintf("byte %d", syntax.Offset)
-	}
-	s.write(w, r, http.StatusBadRequest, body)
-}
-
-// The field names each endpoint takes, read off the wire types so a refusal
-// cannot drift from what the decoder accepts. The decoder does not say how deep
-// an unknown field sat, so the set is every name at any depth.
+// Every field name each endpoint takes, at any depth, read off the wire types
+// so a refusal cannot drift from what the endpoint accepts. Flat because
+// refusedField matches one Postgres column name against it, and a column names
+// no path.
 var (
 	transactionFields = jsonFields(reflect.TypeFor[transactionRequest]())
 	accountFields     = jsonFields(reflect.TypeFor[accountRequest]())
@@ -344,13 +281,14 @@ func jsonFields(t reflect.Type) []string {
 	return out
 }
 
-// shaped is every field the decoder's own words would misdescribe, with the rule
-// in words instead. json has one kind of number, so "number" is true of 100.5
-// and says nothing; what the ledger takes is the whole number of minor units.
-// The names are the json field names the endpoints take, and both endpoints
-// read this, because both decode through unreadable.
+// shaped is every field the json words would misdescribe, with the rule in words
+// instead. json has one kind of number, so "number" is true of 100.5 and says
+// nothing; what the ledger takes is the whole number of minor units. json has no
+// date at all. The names are the json field names the endpoints take, and both
+// endpoints read this, because both read a body through decode.
 var shaped = map[string]string{
 	"amount_minor": ledger.AmountShape,
+	"occurred_at":  ledger.TimeShape,
 }
 
 // wants says what a field would have taken. The rule where a field has one, and
@@ -369,17 +307,6 @@ func leaf(field string) string {
 		return field[i+1:]
 	}
 	return field
-}
-
-// jsonValue is what the body held. The decoder describes a number by its
-// literal — "number 100.5" — and every other kind by the kind alone, so the
-// literal is handed back on its own where there is one: it is the half of the
-// message a client can act on.
-func jsonValue(described string) string {
-	if literal, ok := strings.CutPrefix(described, "number "); ok {
-		return literal
-	}
-	return described
 }
 
 // jsonKind says what a field wanted in the words json uses, rather than in a Go
@@ -423,18 +350,6 @@ func refusedField(err error, fields []string) string {
 		return name
 	}
 	return ""
-}
-
-// DisallowUnknownFields reports through errors.New, so the field name is only in
-// the text.
-var unknownFieldMessage = regexp.MustCompile(`^json: unknown field "(.*)"$`)
-
-func unknownField(err error) string {
-	m := unknownFieldMessage.FindStringSubmatch(err.Error())
-	if m == nil {
-		return ""
-	}
-	return m[1]
 }
 
 // refuse turns the ledger's sentinel errors into a status.

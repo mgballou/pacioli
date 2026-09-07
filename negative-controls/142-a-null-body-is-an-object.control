@@ -1,0 +1,14 @@
+# json.Unmarshal reads null into a map without complaint, so a body of null
+# passes for an object with no fields in it and reaches the ledger as an empty
+# entry. The refusal then blames a field the client never sent.
+
+title: a body of null is taken for an object with nothing in it
+file: internal/ledgerhttp/decode.go
+run: go test -count=1 -run TestAJsonBodyThatIsNotAnObjectIsNotCalledUnreadable -v ./internal/ledgerhttp/
+--- before
+	trimmed := bytes.TrimLeft(raw, " \t\r\n")
+	return len(trimmed) > 0 && trimmed[0] == '{'
+--- after
+	// negative control: an object is whatever will read into a map
+	var got map[string]json.RawMessage
+	return json.Unmarshal(raw, &got) == nil

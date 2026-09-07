@@ -1,0 +1,17 @@
+# Without the whole walk, a body with three mistakes in it takes three round
+# trips to mend, and the client learns of the second only after fixing the first.
+
+title: the reading stops at the first field it cannot read
+file: internal/ledgerhttp/decode.go
+run: go test -count=1 -run TestABodyWithSeveralBadFieldsNamesEveryOne -v ./internal/ledgerhttp/
+--- before
+		if item, ok := got[name]; ok {
+			bad = append(bad, readValue(item, v.Field(i), under(path, name))...)
+		}
+--- after
+		// negative control: the reading stops at the first fault it finds
+		if item, ok := got[name]; ok {
+			if bad = append(bad, readValue(item, v.Field(i), under(path, name))...); len(bad) > 0 {
+				return bad
+			}
+		}

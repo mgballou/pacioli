@@ -84,6 +84,12 @@ const MaxDescription = 500
 
 var DescriptionShape = fmt.Sprintf("1 to %d characters, %s", MaxDescription, NotBlank)
 
+// TimeShape puts what transactions.occurred_at takes on the wire into words a
+// client can act on. The column is a timestamptz and json has no date, so the
+// rule is the one encoding/json holds a time.Time to, said out loud with a
+// timestamp that satisfies it.
+const TimeShape = "an RFC 3339 timestamp, as in 2026-09-07T14:30:00Z"
+
 // A Leg is one side of a transaction: an account code and a signed amount in
 // minor units. Debit is positive, credit negative, and the sides must cancel.
 type Leg struct {

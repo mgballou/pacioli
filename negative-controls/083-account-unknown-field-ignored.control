@@ -1,11 +1,18 @@
-# Without DisallowUnknownFields, a misspelt field is dropped and the refusal is useless.
+# Without the check, a misspelt field is dropped and the account is opened with
+# a blank where the client thought it had sent something.
 
-title: a field the account endpoint does not define is ignored
-file: internal/ledgerhttp/accounts.go
+title: a field an endpoint does not define is dropped rather than refused
+file: internal/ledgerhttp/decode.go
 run: go test -count=1 -run TestAFieldTheAccountEndpointDoesNotDefineIsRefused -v ./internal/ledgerhttp/
 --- before
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	for _, name := range slices.Sorted(maps.Keys(got)) {
+		if !defined[name] {
+			bad = append(bad, badField{
+				Parameter: under(path, name),
+				Valid:     jsonNamesOf(t),
+				unknown:   true,
+			})
+		}
+	}
 --- after
-	// negative control: an unknown field is dropped rather than refused
-	dec := json.NewDecoder(r.Body)
+	// negative control: a name this object does not define is dropped

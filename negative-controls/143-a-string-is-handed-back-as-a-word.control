@@ -1,0 +1,17 @@
+# Handed back as the word for its kind, the string "100" and the number 100 are
+# refused with the same four characters, and this endpoint takes one of them.
+
+title: a string is handed back as the word for its kind rather than as itself
+file: internal/ledgerhttp/decode.go
+run: go test -count=1 -run TestTheWrongTypeRefusalSaysWhatTypeItWanted -v ./internal/ledgerhttp/
+--- before
+	case '"':
+		var s string
+		if json.Unmarshal(trimmed, &s) != nil {
+			return "string"
+		}
+		return strconv.Quote(shown(s))
+--- after
+	// negative control: a string is the word for its kind
+	case '"':
+		return "string"

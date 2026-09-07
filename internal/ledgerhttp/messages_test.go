@@ -20,7 +20,17 @@ type refusal struct {
 	Expected   string   `json:"expected"`
 	Characters int      `json:"characters"`
 	Valid      []string `json:"valid"`
+	Fields     []field  `json:"fields"`
 	See        string   `json:"see"`
+}
+
+// field is one entry of the list a refusal carries when a body got more than
+// one field wrong.
+type field struct {
+	Parameter string   `json:"parameter"`
+	Value     string   `json:"value"`
+	Expected  string   `json:"expected"`
+	Valid     []string `json:"valid"`
 }
 
 // kinds is the closed set account_kind holds. A refusal about a kind has to
@@ -107,10 +117,26 @@ func TestTheUnknownFieldRefusalCarriesTheFieldsThereAre(t *testing.T) {
 	if got.Parameter != "descriptoin" {
 		t.Errorf("refusal = %+v, want the field that was given", got)
 	}
-	for _, want := range []string{"account", "amount_minor", "currency", "description", "occurred_at", "postings"} {
-		if !slices.Contains(got.Valid, want) {
-			t.Errorf("the refusal lists %v, and %q is missing", got.Valid, want)
-		}
+	// The set an entry takes, and not the set a posting takes as well: the
+	// decoder reads an object at a time, so it knows which object the name
+	// was not in.
+	if !slices.Equal(got.Valid, []string{"currency", "description", "occurred_at", "postings"}) {
+		t.Errorf("the refusal lists %v, want what an entry takes", got.Valid)
+	}
+
+	res, body = post(t, srv.URL+"/v1/transactions", `{
+	  "currency": "GBP", "description": "Refund",
+	  "postings": [{"account": "assets.cash", "amont_minor": -500}]}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+	}
+
+	got = read(t, body)
+	if got.Parameter != "postings[0].amont_minor" {
+		t.Errorf("refusal = %+v, want the leg and the field that was given", got)
+	}
+	if !slices.Equal(got.Valid, []string{"account", "amount_minor"}) {
+		t.Errorf("the refusal lists %v, want what a posting takes", got.Valid)
 	}
 }
 
@@ -125,7 +151,7 @@ func TestTheWrongTypeRefusalSaysWhatTypeItWanted(t *testing.T) {
 	}
 
 	got := read(t, body)
-	if got.Parameter != "postings.amount_minor" || got.Value != "string" || got.Expected != ledger.AmountShape {
+	if got.Parameter != "postings[0].amount_minor" || got.Value != `"-500"` || got.Expected != ledger.AmountShape {
 		t.Errorf("refusal = %+v, want the field, what it held and what it wanted", got)
 	}
 }
@@ -144,7 +170,7 @@ func TestTheDecimalAmountRefusalNamesMinorUnitsAndNotJustANumber(t *testing.T) {
 	}
 
 	got := read(t, body)
-	if got.Parameter != "postings.amount_minor" {
+	if got.Parameter != "postings[0].amount_minor" {
 		t.Errorf("refusal = %+v, want the field that was sent", got)
 	}
 	if got.Value != "100.5" {
@@ -376,5 +402,138 @@ func TestAnUnknownAccountRefusalSendsTheReaderSomewhere(t *testing.T) {
 	}
 	if got := read(t, body); got.Code != "assets.csah" {
 		t.Errorf("refusal = %+v, want the code that was asked for", got)
+	}
+}
+
+// "tuesday" is not a date, and the body carrying it is good json throughout.
+// The endpoint answered "the request body is not json this endpoint can read",
+// which was false about the body and said nothing about the field. occurred_at
+// is a time.Time, and encoding/json hands a type that reads itself back as a
+// plain error with no field on it, so the whole body wore the fault.
+func TestABadTimestampNamesTheFieldAndTheShapeATimestampTakes(t *testing.T) {
+	srv := serve(t, seeded)
+
+	for _, c := range []struct{ name, sent, value string }{
+		{"a day of the week", `"tuesday"`, `"tuesday"`},
+		{"a date with no time on it", `"2026-09-07"`, `"2026-09-07"`},
+		{"a number", `17`, "17"},
+		{"a boolean", `true`, "true"},
+		{"an object", `{}`, "object"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res, body := post(t, srv.URL+"/v1/transactions", `{
+			  "currency": "GBP", "description": "Refund", "occurred_at": `+c.sent+`,
+			  "postings": [
+			    {"account": "assets.cash", "amount_minor": -500},
+			    {"account": "liabilities.customer", "amount_minor": 500}]}`)
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+			}
+
+			got := read(t, body)
+			if strings.Contains(got.Error, "not json") {
+				t.Errorf("refusal = %+v, and the body it is describing is json", got)
+			}
+			if got.Parameter != "occurred_at" || got.Value != c.value {
+				t.Errorf("refusal = %+v, want the field and what it held", got)
+			}
+			if got.Expected != ledger.TimeShape {
+				t.Errorf("expected = %q, want %q", got.Expected, ledger.TimeShape)
+			}
+		})
+	}
+}
+
+// A body that is json and is not an object wore the same false sentence. It is
+// the whole body that is wrong here, so the refusal names no field.
+func TestAJsonBodyThatIsNotAnObjectIsNotCalledUnreadable(t *testing.T) {
+	for _, c := range []struct{ name, sent, value string }{
+		{"an array", `[1, 2, 3]`, "array"},
+		{"a string", `"hello"`, `"hello"`},
+		{"a number", `42`, "42"},
+		{"null", `null`, "null"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := serve(t, seeded)
+
+			res, body := post(t, srv.URL+"/v1/transactions", c.sent)
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+			}
+			got := read(t, body)
+			if strings.Contains(got.Error, "not json") {
+				t.Errorf("refusal = %+v, and the body it is describing is json", got)
+			}
+			if got.Value != c.value || got.Expected == "" {
+				t.Errorf("refusal = %+v, want what the body held and what it should have", got)
+			}
+
+			res, body = postPlain(t, srv.URL+"/v1/accounts", c.sent)
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("the open gave %d, want 400: %s", res.StatusCode, body)
+			}
+			if got := read(t, body); got.Value != c.value {
+				t.Errorf("the open answered %+v, want what the body held", got)
+			}
+		})
+	}
+}
+
+// encoding/json stops at the first field it cannot read, so a body with three
+// mistakes in it took three round trips to mend. Every one is named, and the
+// first is still where it has always been, so a client reading parameter alone
+// reads what it always did.
+func TestABodyWithSeveralBadFieldsNamesEveryOne(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, body := post(t, srv.URL+"/v1/transactions", `{
+	  "currency": 7, "description": [], "occurred_at": "tuesday",
+	  "postings": [{"account": "assets.cash", "amount_minor": 100.5}]}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+	}
+
+	got := read(t, body)
+	want := []string{"currency", "description", "postings[0].amount_minor", "occurred_at"}
+	var named []string
+	for _, f := range got.Fields {
+		named = append(named, f.Parameter)
+		if f.Value == "" || f.Expected == "" {
+			t.Errorf("field %+v, want what it held and what it wanted", f)
+		}
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(named)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("the refusal names %v, want every field that was wrong: %v", named, want)
+	}
+	if got.Parameter != got.Fields[0].Parameter || got.Value != got.Fields[0].Value {
+		t.Errorf("refusal = %+v, want the first of the list at the top of the body", got)
+	}
+}
+
+// The fix for the four sentences above is not a trade of one wrong answer for
+// another: a body that is genuinely not json is still told so.
+func TestABodyThatIsNotJsonIsStillToldSo(t *testing.T) {
+	srv := serve(t, seeded)
+
+	for _, c := range []struct{ name, sent, want string }{
+		{"prose", `not json at all`, "not json"},
+		{"a body that stops early", `{"currency": "GBP"`, "not json"},
+		{"nothing at all", ``, "empty"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res, body := post(t, srv.URL+"/v1/transactions", c.sent)
+			if res.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+			}
+			got := read(t, body)
+			if !strings.Contains(got.Error, c.want) {
+				t.Errorf("refusal = %+v, want it to say %q", got, c.want)
+			}
+			// Where the reading stopped, or what it was short of. A client
+			// cannot work either out from a body it thought was json.
+			if got.Value == "" && got.Expected == "" {
+				t.Errorf("refusal = %+v, want where the reading stopped or what it wanted", got)
+			}
+		})
 	}
 }

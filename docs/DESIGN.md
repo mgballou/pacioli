@@ -620,39 +620,81 @@ level. The retry contract is not.
 
 ## 20. A refusal never answers with a word that is true of what was sent
 
-**What it does.** `POST /v1/transactions` with `"amount_minor": 100.5` answers
-`expected: a whole number of minor units, so 100.50 is 10050, from
--9223372036854775808 to 9223372036854775807`, and hands back `100.5` as the value.
-It used to answer `expected: number`. A field whose type json can describe still
-gets the json word for it, except that an integer field is now told apart from a
-float one: `a whole number`, not `number`.
+**What it does.** The two writes read a body a field at a time. A field that is
+not the shape the endpoint takes is named, with the json the body held there and
+the rule it broke, and every field a body got wrong is named rather than the
+first:
 
-**The obvious alternative.** Leave it. `encoding/json` reports an
-`UnmarshalTypeError` carrying the Go type, `jsonKind` turns that into the json
-word for it, and the whole thing is nine lines that need no field to know
-anything about itself.
+```console
+$ curl -s -X POST localhost:8080/v1/transactions \
+    -H 'Content-Type: application/json' -H 'Idempotency-Key: 4f1c9a2e-lie-0001' \
+    -d '{"currency":"GBP","occurred_at":"tuesday","description":"x","postings":[]}'
+{
+  "error": "the field is not the shape this endpoint takes",
+  "parameter": "occurred_at",
+  "value": "\"tuesday\"",
+  "expected": "an RFC 3339 timestamp, as in 2026-09-07T14:30:00Z",
+  "see": "..."
+}
+```
 
-**Why that is wrong.** 100.5 *is* a number. A message that names the rule the
-value already satisfies tells a client its own value was the one that was asked
-for, which is worse than saying nothing: it sends the reader to look at the
-field name, the nesting, the content type — anywhere but the decimal point. The
-rule that was actually broken is this ledger's, not json's, and json cannot
-state it, because json has one kind of number and no idea what a minor unit is.
+`"amount_minor": 100.5` answers `a whole number of minor units, so 100.50 is
+10050, from -9223372036854775808 to 9223372036854775807`, and hands back `100.5`
+as the value. It used to answer `expected: number`.
+
+**The obvious alternative.** Hand the whole body to `encoding/json` and report
+whatever it returns, which is what it did. That is two lines per endpoint and it
+reads every shape the wire types can hold, so nothing about a field has to be
+written down twice.
+
+**Why that is wrong, for the amounts.** 100.5 *is* a number. A message that
+names the rule the value already satisfies tells a client its own value was the
+one that was asked for, which is worse than saying nothing: it sends the reader
+to look at the field name, the nesting, the content type — anywhere but the
+decimal point. The rule that was actually broken is this ledger's, not json's,
+and json cannot state it, because json has one kind of number and no idea what a
+minor unit is.
+
+**Why that is wrong, for the rest.** `encoding/json` reports the field it could
+not read only where the failure is its own. A type that reads itself reports a
+plain error carrying no field at all, and `occurred_at` is a `time.Time`, so a
+body holding `"tuesday"` came back **the request body is not json this endpoint
+can read** — of a body that was good json throughout. The same sentence covered
+every body that was json and was not an object: an array, a bare string, a
+number, and `null`, which `json.Unmarshal` reads into a map without complaint
+and which therefore reached the ledger as an empty entry and was refused for a
+missing currency the client never sent. Four false sentences, on the first thing
+a reader testing the README's headline claim will type.
+
+And the decoder stops at the first fault it finds, so a body with three mistakes
+in it took three round trips to mend, each one revealing the next.
+
+**What the reading owes.** `readValue` dispatches on the type: a type that reads
+itself is a leaf and its refusal is turned into the field's name; a struct is
+read key by key against its own json tags; a slice is read element by element,
+so a fault in the third leg is named `postings[2].amount_minor` and not
+`postings.amount_minor`. A name the object does not define is refused against
+that object's own set, which is why a misspelt field inside a posting is now
+offered `account` and `amount_minor` rather than every name the endpoint takes
+at any depth.
 
 `shaped` is one map from a json field name to the rule in words, read by both
-endpoints because both decode through `unreadable`. It is the same shape as
+endpoints because both decode through the same reader. It is the same shape as
 `bounded`, which does the same job for the fields the schema holds to a length.
-One entry today, `amount_minor`, and that is the point: the fix is not a string
-edited in one branch of one handler.
+Two entries, `amount_minor` and `occurred_at`, and that is the point: the fix is
+not a string edited in one branch of one handler.
 
-**The honest cost.** The decoder's message is generic by construction, so this
-is a table of exceptions to it and not a wrapper that makes every field describe
-itself. A per-field decoder — one that reads each value as a `json.RawMessage`
-and hands it to a type that owns its own rule — would make the exception table
-unnecessary and would say something true about `occurred_at` as well, which
-today is answered "the request body is not json this endpoint can read" when the
-body is perfectly good json holding a date nobody can parse. That is a bigger
-change than the message it would fix, and it is not made here.
+**What the value is.** The json the body held, which is not the same as the value
+a schema refusal hands back: that one is the string the ledger was given, after
+this reader decoded it. A string keeps its quotes here, because without them the
+number 100 and the string `"100"` are refused with the same four characters and
+this endpoint takes one of them.
+
+**What stays.** A body that is genuinely not json is still told so, and still
+told where the reading stopped. The status codes are the ones these refusals
+already used. A body that got one field wrong is answered in the shape it always
+was — the name, the value and the rule at the top level — and `fields` appears
+only when there is more than one, carrying all of them, the first included.
 
 ## 21. Blank is a rule in the schema, and it is written once
 

@@ -1,0 +1,13 @@
+# occurred_at is a time.Time, which reads itself and reports a plain error with
+# no field on it. Walked as an ordinary struct, "tuesday" is answered with the
+# word object, and the rule an RFC 3339 timestamp is held to is never said.
+
+title: a type that reads itself is walked as though it did not
+file: internal/ledgerhttp/decode.go
+run: go test -count=1 -run TestABadTimestampNamesTheFieldAndTheShapeATimestampTakes -v ./internal/ledgerhttp/
+--- before
+	case reflect.PointerTo(t).Implements(jsonUnmarshaler):
+	case t.Kind() == reflect.Struct:
+--- after
+	// negative control: a type that reads itself is walked field by field
+	case t.Kind() == reflect.Struct:

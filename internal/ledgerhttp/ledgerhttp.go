@@ -251,6 +251,11 @@ type errorBody struct {
 	// Valid is the whole set, for a set that is closed.
 	Valid []string `json:"valid,omitempty"`
 
+	// Fields is every field a body got wrong, set only where it got more than
+	// one wrong. Parameter, Value, Expected and Valid name the first of them,
+	// and it is in here too, so a client that reads this list reads all of it.
+	Fields []badField `json:"fields,omitempty"`
+
 	// See is where the rule is written down. It is the same for every refusal.
 	See string `json:"see,omitempty"`
 }

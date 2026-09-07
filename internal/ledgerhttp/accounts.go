@@ -2,9 +2,7 @@ package ledgerhttp
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/mgballou/pacioli/internal/docs"
@@ -26,24 +24,8 @@ func (s *server) openAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
-
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-
 	var req accountRequest
-	if err := dec.Decode(&req); err != nil {
-		s.unreadable(w, r, err, accountFields)
-		return
-	}
-	// The decoder stops at the first json value, so without this `{...}{...}`
-	// would open the first account and say nothing about the second.
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		s.write(w, r, http.StatusBadRequest, errorBody{
-			Error:    "the request body carries more than one json value",
-			Expected: "one json object, and nothing after it",
-			See:      docs.Home,
-		})
+	if !s.decode(w, r, &req) {
 		return
 	}
 
