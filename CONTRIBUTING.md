@@ -50,11 +50,10 @@ reasoning behind the rules below; read it before arguing with one.
   open, so `?currency=ZWL` is a 200 over `[]`. The query parameters an endpoint
   defines are closed too, so `?curency=GBP` is a 400 naming the parameter.
 - **Read the closed set from Postgres.** `ledger.checkKind` asks
-  `enum_range(NULL::account_kind)` rather than holding the five in Go, so a sixth
-  kind needs only a schema edit.
+  `enum_range(NULL::account_kind)`, so a sixth kind needs only a schema edit.
 - **Keep the binary a wiring layer.** `cmd/pacioli serve` mounts
   `ledgerhttp.Handler` and adds no route of its own. It is a listener, a pool, a
-  signal and a drain. Draining is not optional: a client cannot tell a cut
+  signal and a drain. Draining is required: a client cannot tell a cut
   connection from a network fault, so it retries.
 - **Require an `Idempotency-Key` on `POST /v1/transactions`.** `ledger.Once`
   reserves the key with one `INSERT` before the entry is written. `Once` takes
@@ -66,7 +65,7 @@ reasoning behind the rules below; read it before arguing with one.
 - **Own the wire types.** `internal/ledgerhttp` converts `ledger.Balance` into a
   struct of its own rather than hanging JSON tags on the domain, so renaming a
   domain field breaks a compile instead of a published API. Routing is
-  `http.ServeMux` with the method in the pattern. There is no router dependency.
+  `http.ServeMux` with the method in the pattern.
 - **Give a handler a `Store`, never a pool.** `ledgerhttp.Pool` is the one a
   server runs on. A test supplies its own and hands the handler the transaction
   the test is already inside. Do not simplify `Store` to a `*sql.DB`.

@@ -4,13 +4,13 @@
 
 <h1>pacioli</h1>
 
-<p><strong>A double-entry ledger whose rules live in Postgres, not in the service in front of it.</strong></p>
+<p><strong>A double-entry ledger whose rules live in Postgres.</strong></p>
 
 <p>Six HTTP endpoints over a chart of accounts and an append-only book of postings.<br />
 Balances are summed out of those postings on every read, so no stored total can drift.</p>
 
 <p>The balance rule is a deferred constraint trigger, so a migration or a psql session<br />
-cannot write around it, and a refusal says what you sent — not only the rule you broke.</p>
+cannot write around it, and a refusal says what you sent.</p>
 
 <p>
 <a href="https://github.com/mgballou/pacioli/actions/workflows/ci.yml"><img src="https://github.com/mgballou/pacioli/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -22,8 +22,7 @@ cannot write around it, and a refusal says what you sent — not only the rule y
 
 <br />
 
-A ledger has nothing to photograph. This is the thing it can show instead: an entry
-where the fee was typed as 15 rather than 150, and the refusal it earns.
+An entry where the fee was typed as 15 rather than 150, and the refusal it earns.
 
 ```console
 $ curl -sS -i -X POST localhost:8080/v1/transactions \
@@ -75,11 +74,11 @@ caller can commit an entry that does not balance.
 One posting is a `bigint`, so a single amount runs to ±9,223,372,036,854,775,807.
 A total of them has no ceiling: a balance, a side of the trial balance and the
 net an entry is refused with are all `numeric` in Postgres and arbitrary
-precision in Go. There is no amount the book will take and then fail to add up.
+precision in Go. Every amount the book takes, it can add up.
 
 The only dependency is `pgx`. Only its `database/sql` driver registration is
-imported, and every query goes through `database/sql`. There is no ORM and no
-migration framework. One hand-written SQL file is the whole schema.
+imported, and every query goes through `database/sql`. One hand-written SQL file
+is the whole schema.
 
 `docs/DESIGN.md` gives the reasoning behind each of these choices.
 
@@ -99,7 +98,7 @@ GET  /v1/transactions/{id} one entry, in the shape the write answered with
 
 All JSON. Routing is `http.ServeMux` with the method in the pattern, so a `GET`
 on `/v1/transactions` answers 405 and carries the `Allow` header the mux worked
-out. There is no router dependency.
+out.
 
 **Both writes require `Content-Type: application/json`**, and anything else is
 415. That is the CSRF control, and it is the whole of it. A cross-origin form or
@@ -113,10 +112,10 @@ retry contract rather than a decision. There is no authentication; see
 
 Three rules cover every refusal.
 
-**A refusal says what you sent, not only which rule you broke.** Every one names
-the parameter and hands back the value that broke the rule. Where the set of
-allowed values is closed, `valid` lists all of it; where it is open but shaped,
-`expected` says the shape in words. `see` is where the rule is written down.
+**A refusal says what you sent.** Every one names the parameter and hands back
+the value that broke the rule. Where the set of allowed values is closed, `valid`
+lists all of it; where it is open but shaped, `expected` says the shape in words.
+`see` is where the rule is written down.
 
 ```console
 $ curl -s -X POST localhost:8080/v1/accounts \
@@ -169,9 +168,9 @@ control character anywhere — and every name and description is held to it.
 A code is at most 64 characters, a name 100, a description 500, an entry 1,000
 legs. A value past one of those answers 422 with the rule in words, a trimmed
 value, and `characters`: how long the value actually was, which a trimmed value
-cannot say. The 1 MB request body is a backstop behind all of them, not the
-bound — it is what let one entry carry 20,900 legs, 21 seconds inside a single
-request, and four accounts answer a report with a megabyte.
+cannot say. The 1 MB request body is a backstop behind all of them — it is what
+let one entry carry 20,900 legs, 21 seconds inside a single request, and four
+accounts answer a report with a megabyte.
 
 ## The schema
 
