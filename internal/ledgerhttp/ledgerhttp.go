@@ -207,9 +207,13 @@ type balanceBody struct {
 	Postings     int64        `json:"postings"`
 }
 
-// accountListBody wraps the rows in an object.
+// accountListBody wraps the rows in an object, which is what let a page be
+// added to it.
 type accountListBody struct {
 	Accounts []balanceBody `json:"accounts"`
+
+	// Next is the address of the page after this one, absent on the last page.
+	Next string `json:"next,omitempty"`
 }
 
 // trialBody is one currency's side totals.
@@ -323,7 +327,23 @@ func (s *server) balance(w http.ResponseWriter, r *http.Request) {
 }
 
 // accountsQuery is the closed set of parameters GET /v1/accounts takes.
-var accountsQuery = map[string]bool{"currency": true, "kind": true}
+var accountsQuery = map[string]bool{"currency": true, "kind": true, "limit": true, "after": true}
+
+// The page GET /v1/accounts answers with. defaultPage is what a request that
+// names no size gets; maxPage is the most one can ask for.
+//
+// The chart grows and the schema puts no ceiling on it, so the whole of it was
+// the answer: 200,000 accounts came back as 39 MB. A thousand is the number
+// this package already holds an entry's legs to, and a thousand accounts is a
+// response of a few hundred kilobytes. DESIGN.md 23.
+const (
+	defaultPage = 100
+	maxPage     = 1000
+)
+
+// pageShape puts the page size into words a client can act on, the way
+// ledger.CodeShape does for a code.
+var pageShape = fmt.Sprintf("a whole number from 1 to %d", maxPage)
 
 func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 	// Not r.URL.Query(): it drops the error, so `?%zz=1` would arrive as no
@@ -348,7 +368,19 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f := ledger.AccountFilter{Currency: q.Get("currency"), Kind: q.Get("kind")}
+	page, ok := s.pageSize(w, r, q)
+	if !ok {
+		return
+	}
+
+	f := ledger.AccountFilter{
+		Currency: q.Get("currency"),
+		Kind:     q.Get("kind"),
+		After:    q.Get("after"),
+		// One past the page, so the answer knows whether there is another page
+		// without counting the chart.
+		Limit: page + 1,
+	}
 
 	var rows []ledger.Balance
 	err = s.ledger.Read(r.Context(), func(tx *sql.Tx) error {
@@ -361,12 +393,57 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	more := len(rows) > page
+	if more {
+		rows = rows[:page]
+	}
+
 	// Not nil: a question that matched nothing should encode as [], not null.
 	body := accountListBody{Accounts: make([]balanceBody, 0, len(rows))}
 	for _, b := range rows {
 		body.Accounts = append(body.Accounts, balanceOf(b))
 	}
+	if more {
+		body.Next = nextPage(f, page, rows[len(rows)-1].Account)
+	}
 	s.write(w, r, http.StatusOK, body)
+}
+
+// pageSize reads the page size off the query. It is checked before the ledger
+// is asked, so a size this endpoint will not answer with costs a read of
+// nothing.
+func (s *server) pageSize(w http.ResponseWriter, r *http.Request, q url.Values) (int, bool) {
+	asked := q.Get("limit")
+	if asked == "" {
+		return defaultPage, true
+	}
+	page, err := strconv.Atoi(asked)
+	if err != nil || page < 1 || page > maxPage {
+		s.write(w, r, http.StatusBadRequest, errorBody{
+			Error:     "that is not a page size this endpoint answers with",
+			Parameter: "limit",
+			Value:     shown(asked),
+			Expected:  pageShape,
+			See:       docs.Home,
+		})
+		return 0, false
+	}
+	return page, true
+}
+
+// nextPage is where the rest of the answer is: the question that was asked, the
+// size it was answered at, and the last code this page reached.
+func nextPage(f ledger.AccountFilter, page int, last string) string {
+	q := url.Values{}
+	if f.Currency != "" {
+		q.Set("currency", f.Currency)
+	}
+	if f.Kind != "" {
+		q.Set("kind", f.Kind)
+	}
+	q.Set("limit", strconv.Itoa(page))
+	q.Set("after", last)
+	return "/v1/accounts?" + q.Encode()
 }
 
 // queryParameters is the closed set a refusal hands back, read off the same map
@@ -402,6 +479,9 @@ func balanceOf(b ledger.Balance) balanceBody {
 	}
 }
 
+// trial serves one row per currency the chart holds, and takes no page. The
+// schema's currency CHECK is three capitals, so there are at most 17,576 rows
+// however large the chart grows. DESIGN.md 23.
 func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 	var rows []ledger.Trial
 	err := s.ledger.Read(r.Context(), func(tx *sql.Tx) error {

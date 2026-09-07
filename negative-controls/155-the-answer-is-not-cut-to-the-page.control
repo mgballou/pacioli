@@ -1,0 +1,15 @@
+# The list asks the ledger for one row past the page so it can tell whether
+# there is another. Hand that row on and every page is one longer than the size
+# the request asked for.
+
+title: the row that only says there is another page is answered as part of this one
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestAChartLargerThanAPageIsAnsweredWithOnePage -v ./internal/ledgerhttp/
+--- before
+	more := len(rows) > page
+	if more {
+		rows = rows[:page]
+	}
+--- after
+	// negative control: the answer is however many rows came back
+	more := len(rows) > page

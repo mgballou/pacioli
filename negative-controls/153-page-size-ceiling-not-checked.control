@@ -1,0 +1,10 @@
+# Without the ceiling, a client sets its own page size and the bound is a
+# suggestion.
+
+title: the page size is read and held to no ceiling
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestAPageSizePastTheCeilingIsRefusedWithTheValueAndTheCeiling -v ./internal/ledgerhttp/
+--- before
+	if err != nil || page < 1 || page > maxPage {
+--- after
+	if err != nil || page < 1 {

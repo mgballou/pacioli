@@ -757,3 +757,135 @@ smallest possible version of the same complaint.
 **What it does not serve.** `occurred_at` goes in and does not come back, on
 either the write or the read, because the two answer with the same body and
 widening it is an API change this decision did not need to make.
+
+## 23. A read is answered a page at a time, and the page has a number
+
+**What it does.** `GET /v1/accounts` answers with 100 accounts, or the `limit`
+the request asks for, up to 1,000. The answer carries `next`: the address of the
+page after it, holding the same filters, the same size, and the last code this
+page reached. A `limit` outside 1 to 1,000 is a 400 naming the value and the
+rule. The other three reads take no page, and the last part of this decision
+says why each of them needs none.
+
+    $ curl -sS -i 'localhost:8080/v1/accounts?limit=5000'
+    HTTP/1.1 400 Bad Request
+    Content-Type: application/json
+
+    {
+      "error": "that is not a page size this endpoint answers with",
+      "parameter": "limit",
+      "value": "5000",
+      "expected": "a whole number from 1 to 1000",
+      "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+    }
+
+**The obvious alternative.** Decision 16 bounded every quantity a client sends,
+and the chart is opened one account at a time through one of those bounded
+endpoints. Nothing a client can send is large, so leave the reads alone.
+
+**Why that is wrong.** A bound on what goes into one request is not a bound on
+what comes back out of all of them. Decision 16 held a name to 100 characters
+and a code to 64, which fixed a report four requests could inflate to a
+megabyte. It said nothing about the chart itself, and nothing else does either:
+no `CHECK`, no key, no rule anywhere in `0001_ledger.sql` puts a ceiling on how
+many accounts a book holds. Over a chart of 200,000 accounts and a book of
+1,000,000 postings:
+
+    before   GET /v1/accounts   200   39,413,023 bytes   0.83 s, 0.93 s, 1.12 s
+    after    GET /v1/accounts   200       20,396 bytes   12 ms, 13 ms, 17 ms
+
+Both read the same chart; the second one reads the first page of it. A page
+150,000 accounts in costs what the first page costs — 19,796 bytes over 35 ms —
+because a cursor is a seek and not a walk. The largest page the ceiling allows,
+1,000 accounts at the schema's own limits of a 64-character code and a
+100-character name, is 314,136 bytes.
+
+**Why the place in the chart is a code and not an offset.** `OFFSET 150000`
+makes the server read 150,000 rows and throw them away, so the last page of a
+walk costs the most. It is also wrong while anyone is writing: an account opened
+above the cursor shifts every row after it, and the client sees one account
+twice and never sees another. `code` is `UNIQUE` and the list is already in code
+order, so `code > $after` names a place rather than a distance. It costs an
+index seek at any depth, and an account opened during a walk is either past the
+cursor and answered or behind it and already answered.
+
+**Why `next` is an address.** The same reason a posted transaction has one,
+decision 22: a client should not have to build the next request out of parts.
+It carries the filters and the size, so the second page answers the question the
+first one did, and it is readable, so a transcript shows what was asked. An
+opaque token would hide the same three values behind base64 and buy nothing this
+API needs. The `&` in it is written `\u0026`: Go's encoder escapes it, a JSON
+parser puts it back, and that escaping is what keeps a reflected value from
+being read as markup by a browser that sniffs.
+
+**Why the view changed shape.** A `LIMIT` cannot stop a `GROUP BY` early. The
+view aggregated the whole join and grouped it before the outer statement could
+cut the answer down, so a hundred rows cost the whole book: one page 150,000
+accounts in took 94 ms against the grouped view and 4 ms against the lateral
+one, and the grouped number grows with every posting written. The lateral shape
+sums one account's postings per account, over the index the postings already
+carry. It is the same balance by the same definition in the same one place.
+
+The trade is real and it goes the other way for a read of everything: the whole
+chart, ordered, is 532 ms grouped and 962 ms lateral. Nothing over HTTP asks for
+that any more. `ledger.Balances` with a zero `Limit` still can, and it pays the
+double.
+
+**Why 400 and not 422.** Decision 10 puts a request that could not be read on
+one side and a ledger that refused it on the other. The query string is the
+request. `?limit=5000` is refused beside `?kind=liabilty` and `?curency=GBP`,
+which are this endpoint's only other refusals and are both 400, and the ledger
+is never asked in any of the three.
+
+**The numbers themselves.**
+
+- **100 accounts by default.** It is what a request that names no size gets, so
+  it has to be right for whoever did not think about it. A chart of a hundred
+  accounts comes back whole; a chart of a million comes back in 20 kB, which a
+  client can hold and a person can read.
+- **1,000 at most.** It is the number decision 16 already chose for the legs of
+  an entry, for the same reason: past anything a caller has a use for in one
+  round trip, and a response of a few hundred kilobytes rather than tens of
+  megabytes.
+
+A page bounds the rows, and every column of a row but one: a code is 64
+characters, a name 100, a kind and a currency are short and closed.
+`balance_minor` has no ceiling, by decision 15, and it grows with the logarithm
+of the postings behind it — 28 digits would take a million postings all at the
+top of a `bigint`.
+
+**Every endpoint, and what bounds its answer.**
+
+- `GET /v1/accounts` — the chart, which nothing bounds. This decision.
+- `GET /v1/trial-balance` — one row for each currency the chart holds, and
+  `currency ~ '^[A-Z]{3}$'` allows 17,576 of them. The chart above holds an
+  account in every one, so that ceiling is the measurement: 17,576 rows,
+  3,121,972 bytes, about 0.55 s. ISO 4217 lists fewer than 200 currencies in
+  use, which at the same 178 bytes a row is about 32 kB. A page here would be a
+  parameter every reader of a six-endpoint API pays for, to bound something the
+  schema bounds already.
+- `GET /v1/transactions/{id}` — one entry and its legs, and decision 16 holds an
+  entry to 1,000 legs. A book written before that bound can hold an entry with
+  more, the same way it can hold a name longer than 100 characters; the `CHECK`s
+  and the refusals are both on the write path and nothing rewrites a row.
+- `GET /v1/accounts/{code}` — one account.
+- `POST /v1/accounts` and `POST /v1/transactions` — writes, bounded by decision
+  16 field by field.
+
+**What this does to a book that already exists.** The view is replaced by one
+statement, and it rewrites no row and changes no balance:
+
+    CREATE OR REPLACE VIEW account_balances AS
+        SELECT a.id AS account_id, a.code, a.name, a.kind, a.currency,
+               b.balance_minor, b.posting_count
+          FROM accounts a
+          LEFT JOIN LATERAL (
+              SELECT coalesce(sum(p.amount_minor), 0) AS balance_minor,
+                     count(p.id)                      AS posting_count
+                FROM postings p
+               WHERE p.account_id = a.id
+          ) b ON true;
+
+A client that was reading the whole chart out of `GET /v1/accounts` now gets 100
+accounts and the address of the rest. That is an API change, and there is no
+version of this decision that is not one.

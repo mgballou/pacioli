@@ -1,0 +1,10 @@
+# With the limit bound and then multiplied away, LIMIT reads as NULL and the
+# statement answers with every row the filter allows, which is the chart.
+
+title: the page size is bound and then ignored
+file: internal/ledger/balance.go
+run: go test -count=1 -run TestAListAnswersWithAtMostTheLimitItWasGiven -v ./internal/ledger/
+--- before
+		  LIMIT nullif($4::bigint, 0)`, f.Currency, f.Kind, f.After, max(f.Limit, 0))
+--- after
+		  LIMIT nullif($4::bigint * 0, 0)`, f.Currency, f.Kind, f.After, max(f.Limit, 0))

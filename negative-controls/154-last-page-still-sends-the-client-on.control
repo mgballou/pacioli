@@ -1,0 +1,10 @@
+# A chart that divides exactly into pages ends on a full page. Off by one there
+# and the last page names a next that answers with nothing, forever.
+
+title: a last page that is exactly full still claims a page after it
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestTheLastPageCarriesNoNext -v ./internal/ledgerhttp/
+--- before
+	more := len(rows) > page
+--- after
+	more := len(rows) >= page

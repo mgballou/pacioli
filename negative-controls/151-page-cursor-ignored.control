@@ -1,0 +1,10 @@
+# Without the cursor predicate, every page is the first page and the rest of the
+# chart cannot be reached.
+
+title: the page cursor is bound and then ignored
+file: internal/ledger/balance.go
+run: go test -count=1 -run TestFollowingNextReachesEveryAccountOnceAndStops -v ./internal/ledgerhttp/
+--- before
+		    AND (nullif($3::text, '') IS NULL OR code > $3::text)
+--- after
+		    AND (nullif($3::text, '') IS NULL OR true)

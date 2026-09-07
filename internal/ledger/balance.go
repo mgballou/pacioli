@@ -72,6 +72,13 @@ type AccountFilter struct {
 
 	// Kind is one of the account_kind values; anything else is ErrUnknownKind.
 	Kind string
+
+	// After is the code the answer starts past, in the code order Balances
+	// answers in. A code no account holds is an empty answer.
+	After string
+
+	// Limit is how many accounts to answer with. Zero is all of them.
+	Limit int
 }
 
 // balanceColumns reads the account_balances view, so there is one definition of
@@ -103,13 +110,16 @@ func Balances(ctx context.Context, tx *sql.Tx, f AccountFilter) ([]Balance, erro
 	}
 
 	// Every filter is always bound and an unasked one reads as NULL, so the
-	// statement is fixed rather than assembled from strings.
+	// statement is fixed rather than assembled from strings. LIMIT NULL is
+	// every row, which is what a Limit of zero settles to.
 	rows, err := tx.QueryContext(ctx,
 		`SELECT `+balanceColumns+`
 		   FROM account_balances
 		  WHERE (nullif($1::text, '') IS NULL OR currency = $1::text)
 		    AND (nullif($2::text, '') IS NULL OR kind::text = $2::text)
-		  ORDER BY code`, f.Currency, f.Kind)
+		    AND (nullif($3::text, '') IS NULL OR code > $3::text)
+		  ORDER BY code
+		  LIMIT nullif($4::bigint, 0)`, f.Currency, f.Kind, f.After, max(f.Limit, 0))
 	if err != nil {
 		return nil, fmt.Errorf("list balances (currency %q, kind %q): %w", shown(f.Currency), shown(f.Kind), err)
 	}

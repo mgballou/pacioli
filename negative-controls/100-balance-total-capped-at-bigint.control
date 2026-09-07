@@ -5,7 +5,7 @@ title: an account balance past bigint cannot be read back
 file: internal/schema/0001_ledger.sql
 run: make db-reset && go test -count=1 -run TestABalancePastBigintIsHeldAndReadBack -v ./internal/schema/
 --- before
-           coalesce(sum(p.amount_minor), 0) AS balance_minor,
+          SELECT coalesce(sum(p.amount_minor), 0) AS balance_minor,
 --- after
-           -- negative control: the sum is capped at the width of one posting
-           coalesce(sum(p.amount_minor), 0)::bigint AS balance_minor,
+          -- negative control: the sum is capped at the width of one posting
+          SELECT coalesce(sum(p.amount_minor), 0)::bigint AS balance_minor,

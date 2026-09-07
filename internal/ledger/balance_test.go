@@ -178,6 +178,58 @@ func TestBothFiltersNarrowTogether(t *testing.T) {
 	}
 }
 
+func TestAListAnswersWithAtMostTheLimitItWasGiven(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	whole := listed(t, tx, ledger.AccountFilter{})
+	got := listed(t, tx, ledger.AccountFilter{Limit: 3})
+	if want := whole[:3]; !slices.Equal(got, want) {
+		t.Errorf("codes = %v, want the first three of %v", got, whole)
+	}
+}
+
+func TestALimitLargerThanTheChartIsTheWholeChart(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	whole := listed(t, tx, ledger.AccountFilter{})
+	if got := listed(t, tx, ledger.AccountFilter{Limit: len(whole) + 100}); !slices.Equal(got, whole) {
+		t.Errorf("codes = %v, want %v", got, whole)
+	}
+}
+
+func TestAListStartsPastTheCodeItWasGiven(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	whole := listed(t, tx, ledger.AccountFilter{})
+	got := listed(t, tx, ledger.AccountFilter{After: whole[2]})
+	if want := whole[3:]; !slices.Equal(got, want) {
+		t.Errorf("codes = %v, want everything past %s: %v", got, whole[2], want)
+	}
+}
+
+func TestACodeNoAccountHoldsIsEmptyAndNotAnError(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedWiderChart(t, tx)
+
+	if got := listed(t, tx, ledger.AccountFilter{After: "zzz.nothing.holds.this"}); len(got) != 0 {
+		t.Errorf("codes = %v, want none", got)
+	}
+}
+
+// listed is the codes f matches, in the order Balances answers in.
+func listed(t *testing.T, tx *sql.Tx, f ledger.AccountFilter) []string {
+	t.Helper()
+
+	got, err := ledger.Balances(context.Background(), tx, f)
+	if err != nil {
+		t.Fatalf("balances (%+v): %v", f, err)
+	}
+	return codes(got)
+}
+
 func TestACurrencyNoAccountHoldsIsEmptyAndNotAnError(t *testing.T) {
 	tx := testdb.Tx(t)
 	seedWiderChart(t, tx)

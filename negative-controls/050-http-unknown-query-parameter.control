@@ -4,6 +4,6 @@ title: a mistyped query parameter is accepted and ignored
 file: internal/ledgerhttp/ledgerhttp.go
 run: go test -count=1 -run TestAnUnknownQueryParameterIsRefused -v ./internal/ledgerhttp/
 --- before
-var accountsQuery = map[string]bool{"currency": true, "kind": true}
+var accountsQuery = map[string]bool{"currency": true, "kind": true, "limit": true, "after": true}
 --- after
-var accountsQuery = map[string]bool{"currency": true, "kind": true, "curency": true}
+var accountsQuery = map[string]bool{"currency": true, "kind": true, "limit": true, "after": true, "curency": true}

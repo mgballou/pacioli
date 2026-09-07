@@ -99,8 +99,8 @@ func TestTheQueryParameterRefusalCarriesTheParametersThereAre(t *testing.T) {
 	if got.Parameter != "curency" {
 		t.Errorf("refusal = %+v, want the parameter that was given", got)
 	}
-	if !slices.Equal(got.Valid, []string{"currency", "kind"}) {
-		t.Errorf("the refusal lists %v, want currency and kind", got.Valid)
+	if !slices.Equal(got.Valid, []string{"after", "currency", "kind", "limit"}) {
+		t.Errorf("the refusal lists %v, want every parameter the list takes", got.Valid)
 	}
 }
 

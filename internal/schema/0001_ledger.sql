@@ -245,14 +245,22 @@ CREATE TRIGGER idempotency_keys_settle_once
     FOR EACH ROW EXECUTE FUNCTION idempotency_record_is_final();
 
 -- Balances are derived, never stored, and signed like a posting.
+--
+-- One aggregate per account, not one GROUP BY over the whole join: the numbers
+-- are the same either way, and this shape is the one a LIMIT can stop early.
+-- DESIGN.md 23.
 CREATE VIEW account_balances AS
     SELECT a.id AS account_id,
            a.code,
            a.name,
            a.kind,
            a.currency,
-           coalesce(sum(p.amount_minor), 0) AS balance_minor,
-           count(p.id)                      AS posting_count
+           b.balance_minor,
+           b.posting_count
       FROM accounts a
-      LEFT JOIN postings p ON p.account_id = a.id
-     GROUP BY a.id;
+      LEFT JOIN LATERAL (
+          SELECT coalesce(sum(p.amount_minor), 0) AS balance_minor,
+                 count(p.id)                      AS posting_count
+            FROM postings p
+           WHERE p.account_id = a.id
+      ) b ON true;

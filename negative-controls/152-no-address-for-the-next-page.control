@@ -1,0 +1,12 @@
+# A page that does not say where the rest of the chart is bounds the answer by
+# hiding most of it.
+
+title: a page is served and where the rest of it is, is not
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestFollowingNextReachesEveryAccountOnceAndStops -v ./internal/ledgerhttp/
+--- before
+	if more {
+		body.Next = nextPage(f, page, rows[len(rows)-1].Account)
+	}
+--- after
+	// negative control: the page after this one has no address

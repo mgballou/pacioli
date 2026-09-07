@@ -85,7 +85,9 @@ is the whole schema.
 ## The endpoints
 
 ```
-GET  /v1/accounts          every account, in code order; ?currency= and ?kind= narrow it
+GET  /v1/accounts          the chart a page at a time, in code order; ?currency= and
+                           ?kind= narrow it, ?limit= and ?after= size and place the
+                           page, and the answer carries the address of the next one
 POST /v1/accounts          open one — code, name, kind, currency; a code already
                            held answers 409 and never opens a second account
 GET  /v1/accounts/{code}   one account's position
@@ -229,14 +231,23 @@ all, err := ledger.Balances(ctx, tx, ledger.AccountFilter{})  // every account, 
 trial, err := ledger.TrialBalance(ctx, tx)                    // debits and credits, per currency
 
 usd, err := ledger.Balances(ctx, tx, ledger.AccountFilter{Currency: "USD", Kind: "asset"})
+page, err := ledger.Balances(ctx, tx, ledger.AccountFilter{After: "assets.cash", Limit: 100})
 ```
 
 Postgres computes every number in one statement, on the caller's own
 transaction. The answer covers the caller's unfinished work and everything
 anyone else has committed, at one snapshot.
 
-A trial balance is per currency. Pence and cents in one total is a number with no
-meaning.
+**`GET /v1/accounts` answers a page at a time.** 100 accounts, or the `limit`
+the request asks for, up to 1,000, and `next` carries the address of the page
+after it, holding the same filters, the same size and the last code it reached.
+Nothing bounds the chart itself, and a book of 200,000 accounts answered that
+endpoint with 39 MB. A `limit` outside 1 to 1,000 is a 400 naming the value and
+the rule.
+
+A trial balance is per currency — pence and cents in one total is a number with
+no meaning — and it takes no page: a currency is three capitals, so it has at
+most 17,576 rows however large the chart grows.
 
 ## The retry contract
 
