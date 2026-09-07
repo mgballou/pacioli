@@ -375,7 +375,7 @@ The test database is Postgres 18 on `127.0.0.1:55432`, described in
 
 ## Proving the tests can fail
 
-A test that cannot fail is decoration. `negative-controls/` holds forty-seven declared
+A test that cannot fail is decoration. `negative-controls/` holds sixty-five declared
 mutations — remove the unique index on idempotency keys, drop the balance
 trigger, stop the server draining, set every timeout back to zero — each naming
 the test that should catch it.
