@@ -1,7 +1,55 @@
-# pacioli
+<div align="center">
 
-A double-entry ledger service in Go. Postgres holds the accounting rules; the
-API is standard library.
+<img src="docs/assets/mark.svg" width="64" alt="" />
+
+<h1>pacioli</h1>
+
+<p><strong>A double-entry ledger whose rules live in Postgres, not in the service in front of it.</strong></p>
+
+<p>Five HTTP endpoints over a chart of accounts and an append-only book of postings.<br />
+Balances are summed out of those postings on every read, so no stored total can drift.</p>
+
+<p>The balance rule is a deferred constraint trigger, so a migration or a psql session<br />
+cannot write around it, and a refusal says what you sent — not only the rule you broke.</p>
+
+<p>
+<a href="https://github.com/mgballou/pacioli/actions/workflows/ci.yml"><img src="https://github.com/mgballou/pacioli/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+<img src="https://img.shields.io/badge/go-1.26-2f5f96" alt="Go 1.26" />
+<img src="https://img.shields.io/badge/license-MIT-2f5f96" alt="MIT" />
+</p>
+
+</div>
+
+<br />
+
+A ledger has nothing to photograph. This is the thing it can show instead: an entry
+where the fee was typed as 15 rather than 150, and the refusal it earns.
+
+```console
+$ curl -sS -i -X POST localhost:8080/v1/transactions \
+    -H 'Idempotency-Key: 4f1c9a2e-deposit-0002' \
+    -d '{"currency": "GBP",
+         "description": "Customer deposit, less fee",
+         "postings": [{"account": "assets.cash",          "amount_minor":  4500},
+                      {"account": "liabilities.customer", "amount_minor": -4350},
+                      {"account": "revenue.fees",         "amount_minor":   -15}]}'
+
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/json
+
+{
+  "error": "the transaction does not balance",
+  "net_minor": 135,
+  "postings": 3,
+  "expected": "postings that net to 0; debits are positive and credits negative",
+  "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+}
+```
+
+Nothing was written. The key reservation and the entry are one transaction, so the key is
+not burned either: correct the leg to -150, send it again under the same key, and it posts.
+
+---
 
     docker compose up
 
@@ -52,14 +100,20 @@ the parameter and hands back the value that broke the rule. Where the set of
 allowed values is closed, `valid` lists all of it; where it is open but shaped,
 `expected` says the shape in words. `see` is where the rule is written down.
 
-```
+```console
 $ curl -s -X POST localhost:8080/v1/accounts \
     -d '{"code":"assets.savings","name":"Savings","kind":"assets","currency":"GBP"}'
 {
   "error": "no such account kind",
   "parameter": "kind",
   "value": "assets",
-  "valid": ["asset", "liability", "equity", "revenue", "expense"],
+  "valid": [
+    "asset",
+    "liability",
+    "equity",
+    "revenue",
+    "expense"
+  ],
   "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
 }
 ```
@@ -197,7 +251,6 @@ with nothing written, the trial balance, and a server that finishes what it
 accepted before it stops. Every step goes over HTTP.
 
 ```
-make demo-post           # a transaction taken and one refused, with the balances either side
 make demo-idempotency    # one key sent twice, then sixteen of it at once under -race
 make demo-serve          # the binary on a socket, four exchanges, a clean exit
 ```
@@ -219,16 +272,18 @@ The test database is Postgres 18 on `127.0.0.1:55432`, described in
 
 ## Proving the tests can fail
 
-A test that cannot fail is decoration. `negative-controls/` holds twenty-seven
-declared mutations — remove the unique index on idempotency keys, drop the
-balance trigger, stop the server draining — each naming the test that should
-catch it.
+A test that cannot fail is decoration. `negative-controls/` holds thirty declared
+mutations — remove the unique index on idempotency keys, drop the balance
+trigger, stop the server draining — each naming the test that should catch it.
 
     make negative-controls
 
 applies each mutation, runs its test, and insists the test is green before the
 mutation and red after. Green after names a test that proves nothing. Red before
 names a broken setup reading as a working guard. Both fail the run.
+
+CI runs what a laptop runs, and nothing else: `fmt`, `build`, `vet`, `lint` and `test`
+in one job, `make negative-controls` in a second.
 
 ## License
 

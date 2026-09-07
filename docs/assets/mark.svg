@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="A ledger rule with two entries either side of it, the same length on both">
+  <g fill="#2f5f96">
+    <rect x="22" y="7" width="4" height="34" rx="1" />
+    <rect x="7" y="16" width="11" height="5" rx="1" />
+    <rect x="7" y="27" width="11" height="5" rx="1" />
+    <rect x="30" y="16" width="11" height="5" rx="1" />
+    <rect x="30" y="27" width="11" height="5" rx="1" />
+  </g>
+</svg>
