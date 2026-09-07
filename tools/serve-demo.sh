@@ -1,7 +1,8 @@
 #!/bin/sh
 #
-# Prints the binary serving on a real socket: the startup log, four request and
-# response exchanges, and a clean stop when it is signalled.
+# Prints the binary serving on a real socket: the startup log, a chart and one
+# entry put in over the API, four request and response exchanges, and a clean
+# stop when it is signalled.
 #
 #   tools/serve-demo.sh [binary] [addr]
 
@@ -10,6 +11,8 @@ set -eu
 bin=${1:-bin/pacioli}
 addr=${2:-127.0.0.1:58080}
 base="http://$addr"
+
+deposit_key='deposit-2026-09-03-0001'
 
 log=$(mktemp)
 server=""
@@ -23,6 +26,25 @@ exchange() {
 	echo
 	echo "\$ curl -sS -i '$base$1'"
 	curl -sS -i "$base$1"
+}
+
+open_account() {
+	echo
+	echo "\$ curl -sS -i -X POST $base/v1/accounts \\"
+	echo "    -H 'Content-Type: application/json' \\"
+	echo "    -d '$1'"
+	printf '%s' "$1" | curl -sS -i -X POST "$base/v1/accounts" \
+		-H 'Content-Type: application/json' --data-binary @-
+}
+
+post() {
+	echo
+	echo "\$ curl -sS -i -X POST $base/v1/transactions \\"
+	echo "    -H 'Idempotency-Key: $1' --data-binary @- <<'JSON'"
+	printf '%s\n' "$2"
+	echo "JSON"
+	printf '%s' "$2" | curl -sS -i -X POST "$base/v1/transactions" \
+		-H 'Content-Type: application/json' -H "Idempotency-Key: $1" --data-binary @-
 }
 
 
@@ -44,27 +66,17 @@ done
 cat "$log"
 
 
-# One psql transaction, because the balance trigger is checked at commit.
-seed=$(cat <<'SQL'
-BEGIN;
-INSERT INTO accounts (code, name, kind, currency) VALUES
-  ('assets.cash',          'Cash at bank',      'asset',     'GBP'),
-  ('liabilities.customer', 'Customer balances', 'liability', 'GBP');
-INSERT INTO transactions (id, currency, description)
-  VALUES ('11111111-1111-1111-1111-111111111111', 'GBP', 'Customer deposit');
-INSERT INTO postings (transaction_id, account_id, currency, amount_minor)
-  SELECT '11111111-1111-1111-1111-111111111111', id, 'GBP',
-         CASE code WHEN 'assets.cash' THEN 4500 ELSE -4500 END
-    FROM accounts;
-COMMIT;
-SQL
-)
+open_account '{"code": "assets.cash", "name": "Cash at bank", "kind": "asset", "currency": "GBP"}'
+open_account '{"code": "liabilities.customer", "name": "Customer balances", "kind": "liability", "currency": "GBP"}'
 
-echo
-echo "\$ docker compose -f compose.test.yaml exec -T postgres psql -U ledger -d ledger_test <<'SQL'"
-printf '%s\n' "$seed"
-echo "SQL"
-printf '%s\n' "$seed" | docker compose -f compose.test.yaml exec -T postgres psql -U ledger -d ledger_test -v ON_ERROR_STOP=1
+post "$deposit_key" '{
+  "currency": "GBP",
+  "description": "Customer deposit",
+  "postings": [
+    {"account": "assets.cash", "amount_minor": 4500},
+    {"account": "liabilities.customer", "amount_minor": -4500}
+  ]
+}'
 
 
 exchange "/v1/accounts/assets.cash"

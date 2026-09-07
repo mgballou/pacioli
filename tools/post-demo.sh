@@ -1,7 +1,8 @@
 #!/bin/sh
 #
-# Prints a transaction taken over HTTP and one refused, with the account balances
-# either side of them.
+# Prints six steps over the HTTP API: two accounts opened, the balances, an
+# entry taken, an entry refused, that entry sent again under its own key, and
+# the balances after.
 #
 #   tools/post-demo.sh [binary] [addr]
 
@@ -11,6 +12,11 @@ bin=${1:-bin/pacioli}
 addr=${2:-127.0.0.1:58080}
 base="http://$addr"
 
+# Readable keys, not uuids. The refusal needs its own, or what it is refused for
+# is the key already being held against a different body.
+deposit_key='deposit-2026-09-07-0001'
+mistyped_key='deposit-2026-09-07-0002'
+
 log=$(mktemp)
 server=""
 cleanup() {
@@ -19,21 +25,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
-get() {
+step() {
 	echo
-	echo "\$ curl -sS '$base$1'"
+	echo "  == $1"
+	echo
+}
+
+get() {
+	echo "\$ curl -sS $base$1"
 	curl -sS "$base$1"
 }
 
-post() {
-	echo
-	echo "\$ curl -sS -i -X POST '$base/v1/transactions' --data-binary @- <<'JSON'"
-	printf '%s\n' "$1"
-	echo "JSON"
-	printf '%s' "$1" | curl -sS -i -X POST "$base/v1/transactions" \
+open_account() {
+	echo "\$ curl -sS -i -X POST $base/v1/accounts \\"
+	echo "    -H 'Content-Type: application/json' \\"
+	echo "    -d '$1'"
+	printf '%s' "$1" | curl -sS -i -X POST "$base/v1/accounts" \
 		-H 'Content-Type: application/json' --data-binary @-
 }
 
+post() {
+	echo "\$ curl -sS -i -X POST $base/v1/transactions \\"
+	echo "    -H 'Idempotency-Key: $1' --data-binary @- <<'JSON'"
+	printf '%s\n' "$2"
+	echo "JSON"
+	printf '%s' "$2" | curl -sS -i -X POST "$base/v1/transactions" \
+		-H 'Content-Type: application/json' -H "Idempotency-Key: $1" --data-binary @-
+}
+
+
+step '1/6  an empty ledger, and a server on it'
 
 echo "\$ $bin serve -addr $addr &"
 "$bin" serve -addr "$addr" 2>"$log" &
@@ -52,21 +73,21 @@ done
 cat "$log"
 
 
-# The chart goes in over psql: there is no endpoint that opens an account yet.
-seed="INSERT INTO accounts (code, name, kind, currency) VALUES
-  ('assets.cash',          'Cash at bank',      'asset',     'GBP'),
-  ('liabilities.customer', 'Customer balances', 'liability', 'GBP');"
+step '2/6  two accounts, opened over the API'
 
+open_account '{"code": "assets.cash", "name": "Cash at bank", "kind": "asset", "currency": "GBP"}'
 echo
-echo "\$ docker compose -f compose.test.yaml exec -T postgres psql -U ledger -d ledger_test <<'SQL'"
-printf '%s\n' "$seed"
-echo "SQL"
-printf '%s\n' "$seed" | docker compose -f compose.test.yaml exec -T postgres psql -U ledger -d ledger_test -v ON_ERROR_STOP=1
-
-get "/v1/accounts"
+open_account '{"code": "liabilities.customer", "name": "Customer balances", "kind": "liability", "currency": "GBP"}'
 
 
-post '{
+step '3/6  the balances before: nothing posted to either'
+
+get /v1/accounts
+
+
+step '4/6  a deposit of 45.00, taken'
+
+deposit='{
   "currency": "GBP",
   "description": "Customer deposit",
   "postings": [
@@ -75,7 +96,12 @@ post '{
   ]
 }'
 
-post '{
+post "$deposit_key" "$deposit"
+
+
+step '5/6  the same deposit with one leg mistyped, and the ledger refusing it'
+
+post "$mistyped_key" '{
   "currency": "GBP",
   "description": "Customer deposit, one leg mistyped",
   "postings": [
@@ -85,7 +111,14 @@ post '{
 }'
 
 
-get "/v1/accounts"
+step '6/6  the deposit sent again under its key, and the balances after'
+
+echo '  The reply carries Idempotent-Replayed and the id the first post was given.'
+echo
+post "$deposit_key" "$deposit"
+
+echo
+get /v1/accounts
 
 
 kill -INT "$server"

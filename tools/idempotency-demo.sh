@@ -22,17 +22,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
-get() {
+step() {
 	echo
+	echo "  == $1"
+	echo
+}
+
+get() {
 	echo "\$ curl -sS '$base$1'"
 	curl -sS "$base$1"
+}
+
+open_account() {
+	echo "\$ curl -sS -i -X POST $base/v1/accounts \\"
+	echo "    -H 'Content-Type: application/json' \\"
+	echo "    -d '$1'"
+	printf '%s' "$1" | curl -sS -i -X POST "$base/v1/accounts" \
+		-H 'Content-Type: application/json' --data-binary @-
 }
 
 # post takes the whole -H argument so the request without a key can be shown as one.
 post() {
 	header=$1
 	body=$2
-	echo
 	if [ -n "$header" ]; then
 		echo "\$ curl -sS -i -X POST '$base/v1/transactions' -H '$header' --data-binary @- <<'JSON'"
 	else
@@ -49,6 +61,8 @@ post() {
 	fi
 }
 
+
+step '1/6  an empty ledger, and a server on it'
 
 echo "\$ $bin serve -addr $addr &"
 "$bin" serve -addr "$addr" 2>"$log" &
@@ -67,15 +81,11 @@ done
 cat "$log"
 
 
-seed="INSERT INTO accounts (code, name, kind, currency) VALUES
-  ('assets.cash',          'Cash at bank',      'asset',     'GBP'),
-  ('liabilities.customer', 'Customer balances', 'liability', 'GBP');"
+step '2/6  two accounts, opened over the API'
 
+open_account '{"code": "assets.cash", "name": "Cash at bank", "kind": "asset", "currency": "GBP"}'
 echo
-echo "\$ docker compose -f compose.test.yaml exec -T postgres psql -U ledger -d ledger_test <<'SQL'"
-printf '%s\n' "$seed"
-echo "SQL"
-printf '%s\n' "$seed" | docker compose -f compose.test.yaml exec -T postgres psql -U ledger -d ledger_test -v ON_ERROR_STOP=1
+open_account '{"code": "liabilities.customer", "name": "Customer balances", "kind": "liability", "currency": "GBP"}'
 
 
 deposit='{
@@ -87,14 +97,24 @@ deposit='{
   ]
 }'
 
+step '3/6  the deposit sent with no key, and the endpoint refusing it'
+
 post "" "$deposit"
 
 
+step '4/6  the deposit sent twice under one key'
+
 post "Idempotency-Key: $key" "$deposit"
+echo
 post "Idempotency-Key: $key" "$deposit"
+
+
+step '5/6  the accounts after: one deposit, not two'
 
 get "/v1/accounts"
 
+
+step '6/6  that key sent again, carrying a different entry'
 
 post "Idempotency-Key: $key" '{
   "currency": "GBP",

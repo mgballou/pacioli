@@ -110,7 +110,7 @@ because `Idempotency-Key` is a custom header, but that was an accident of the
 retry contract rather than a decision. There is no authentication; see
 `docs/DESIGN.md` for why not.
 
-Three rules cover every refusal.
+Five rules cover every refusal.
 
 **A refusal says what you sent.** Every one names the parameter and hands back
 the value that broke the rule. Where the set of allowed values is closed, `valid`

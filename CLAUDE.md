@@ -42,6 +42,17 @@ editing `README.md`, check GitHub still renders the block:
     jq -Rs '{text: ., mode: "markdown"}' README.md > /tmp/md.json
     gh api -X POST /markdown --input /tmp/md.json | head -20
 
-**`make demo-post` is reported broken** as of 7 September 2026 — `tools/post-demo.sh`
-is stale. Reported rather than measured here. `make demo`, `make demo-idempotency`
-and `make demo-serve` are the working ones.
+**The demo targets seed over HTTP.** All four — `make demo`, `make demo-post`,
+`make demo-idempotency`, `make demo-serve` — open their chart through
+`POST /v1/accounts` and post through `POST /v1/transactions`. Nothing under
+`tools/` touches psql. All four ran green from a cold stack on 7 September 2026.
+
+**A demo entry meant to be refused needs its own idempotency key.** Send the
+refusal under a key an accepted entry already holds and the answer is 409, the
+key conflict, rather than the 422 the step set out to show.
+
+**`rtk` truncates into a redirect.** The hook rewrites a bare `make`, so
+`make demo-post > out.txt` saved 51 of 189 lines and wrote the line
+`... (119 lines truncated)` into the file as though the run had printed it. The
+proof this repo asks for is a pasted transcript, so capture one with
+`rtk proxy make demo-post > out.txt`.
