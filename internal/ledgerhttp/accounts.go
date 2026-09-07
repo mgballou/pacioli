@@ -92,7 +92,7 @@ func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error
 			Parameter: "code",
 			Value:     shown(req.Code),
 			Expected:  "a code no account holds",
-			See:       "GET /v1/accounts/" + req.Code + " says what holds it; " + docs.Home,
+			See:       "GET /v1/accounts/" + shown(req.Code) + " says what holds it; " + docs.Home,
 		})
 
 	case errors.Is(err, ledger.ErrUnknownKind):
@@ -109,12 +109,14 @@ func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error
 		s.logf("POST %s: %v", r.URL.RequestURI(), err)
 		body := errorBody{
 			Error: "the ledger will not hold that account",
-			Code:  req.Code,
+			Code:  shown(req.Code),
 			See:   docs.Home,
 		}
 		if field := refusedField(err, accountFields); field != "" {
+			value := req.value(field)
 			body.Parameter = field
-			body.Value = shown(req.value(field))
+			body.Value = shown(value)
+			bound(&body, field, value)
 		}
 		s.write(w, r, http.StatusUnprocessableEntity, body)
 

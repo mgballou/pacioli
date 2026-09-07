@@ -1,0 +1,15 @@
+# Without the primary key there is nothing to conflict with, so every leg queues
+# its own check and the entry is summed once per leg all over again.
+
+title: every leg queues its own balance check
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestManyLegsQueueOneBalanceCheck -v ./internal/schema/
+--- before
+CREATE TABLE balance_checks (
+    transaction_id uuid PRIMARY KEY
+);
+--- after
+CREATE TABLE balance_checks (
+    -- negative control: nothing to conflict with, so a leg queues its own check
+    transaction_id uuid
+);

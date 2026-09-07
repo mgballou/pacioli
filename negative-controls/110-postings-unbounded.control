@@ -1,0 +1,19 @@
+# Without the bound, the only ceiling on a leg count is the 1 MB body, which is
+# 20,900 legs in one request.
+
+title: an entry carries as many legs as the request body will hold
+file: internal/ledgerhttp/transactions.go
+run: go test -count=1 -run TestMorePostingsThanTheBoundAreRefusedWithTheBound -v ./internal/ledgerhttp/
+--- before
+	if n := len(req.Postings); n > maxPostings {
+		s.write(w, r, http.StatusUnprocessableEntity, errorBody{
+			Error:     "the entry carries more postings than this endpoint takes",
+			Parameter: "postings",
+			Value:     strconv.Itoa(n),
+			Expected:  fmt.Sprintf("at most %d postings", maxPostings),
+			See:       docs.Home,
+		})
+		return
+	}
+--- after
+	// negative control: the leg count runs to the request body and no further

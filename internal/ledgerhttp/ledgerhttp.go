@@ -139,6 +139,11 @@ type errorBody struct {
 	// Expected is the rule in words, for a set that is open but shaped.
 	Expected string `json:"expected,omitempty"`
 
+	// Characters is how long Value was before it was trimmed to fit, set only
+	// where the length is what broke the rule. Value alone cannot say how far
+	// over the limit a 100,000-character description was.
+	Characters int `json:"characters,omitempty"`
+
 	// Valid is the whole set, for a set that is closed.
 	Valid []string `json:"valid,omitempty"`
 
@@ -154,6 +159,32 @@ func validKinds(err error) []string {
 		return unknown.Valid
 	}
 	return nil
+}
+
+// bounded is every field the schema holds to a length, with the rule in words
+// and the characters it allows. The names are the schema's column names, which
+// are the json field names the endpoints take.
+var bounded = map[string]struct {
+	shape string
+	most  int
+}{
+	"code":        {ledger.CodeShape, ledger.MaxCode},
+	"name":        {ledger.NameShape, ledger.MaxName},
+	"description": {ledger.DescriptionShape, ledger.MaxDescription},
+}
+
+// bound fills in the rule a bounded field is held to, and how long the value
+// was when the length is what broke it. A field the schema does not bound by
+// length leaves the refusal exactly as it was.
+func bound(body *errorBody, field, value string) {
+	b, ok := bounded[field]
+	if !ok {
+		return
+	}
+	body.Expected = b.shape
+	if n := utf8.RuneCountInString(value); n > b.most {
+		body.Characters = n
+	}
 }
 
 // shown trims a value a client chose to something a refusal can carry back.
@@ -175,7 +206,7 @@ func (s *server) balance(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		s.fail(w, r, err, errorBody{Code: code})
+		s.fail(w, r, err, errorBody{Code: shown(code)})
 		return
 	}
 
@@ -217,7 +248,7 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
-		s.fail(w, r, err, errorBody{Parameter: "kind", Value: f.Kind})
+		s.fail(w, r, err, errorBody{Parameter: "kind", Value: shown(f.Kind)})
 		return
 	}
 

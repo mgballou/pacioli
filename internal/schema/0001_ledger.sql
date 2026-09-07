@@ -12,8 +12,10 @@ CREATE TYPE account_kind AS ENUM (
 
 CREATE TABLE accounts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]*$'),
-    name       text NOT NULL CHECK (btrim(name) <> ''),
+    -- Bounded as well as shaped: the code is a URL path segment on the way
+    -- back out, and a 100 kB one was.
+    code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]{0,63}$'),
+    name       text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100),
     kind       account_kind NOT NULL,
     currency   text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -25,7 +27,7 @@ CREATE TABLE accounts (
 CREATE TABLE transactions (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     currency    text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
-    description text NOT NULL CHECK (btrim(description) <> ''),
+    description text NOT NULL CHECK (btrim(description) <> '' AND char_length(description) <= 500),
     occurred_at timestamptz NOT NULL DEFAULT now(),
     created_at  timestamptz NOT NULL DEFAULT now(),
 
@@ -79,6 +81,29 @@ BEGIN
 END;
 $$;
 
+-- One entry with legs still to check. Postgres has no deferred statement
+-- trigger — CREATE CONSTRAINT TRIGGER takes FOR EACH ROW and nothing else — so
+-- a deferred check hung straight off postings ran once per leg and summed every
+-- leg each time. The legs name their transaction here instead, at most once,
+-- and the deferred check hangs off this table.
+--
+-- Nothing here outlives the transaction that wrote it: the check deletes the row
+-- it fired on, so legs added after a check queue another one.
+CREATE TABLE balance_checks (
+    transaction_id uuid PRIMARY KEY
+);
+
+CREATE FUNCTION queue_a_balance_check() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    -- Not deferred: the row has to be there before the deferred half runs, and
+    -- the conflict is what makes 16,000 legs queue one check and not 16,000.
+    INSERT INTO balance_checks (transaction_id) VALUES (NEW.transaction_id)
+        ON CONFLICT DO NOTHING;
+    RETURN NULL;
+END;
+$$;
+
 -- Two functions because plpgsql resolves NEW's fields when the function is planned.
 CREATE FUNCTION transactions_balance_check() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -88,23 +113,29 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION postings_balance_check() RETURNS trigger
+CREATE FUNCTION queued_balance_check() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM assert_transaction_balances(NEW.transaction_id);
+    DELETE FROM balance_checks WHERE transaction_id = NEW.transaction_id;
     RETURN NULL;
 END;
 $$;
 
+CREATE TRIGGER postings_queue_a_balance_check
+    AFTER INSERT ON postings
+    FOR EACH ROW EXECUTE FUNCTION queue_a_balance_check();
+
+-- An entry with no legs queues nothing, so this one still hangs off transactions.
 CREATE CONSTRAINT TRIGGER transactions_must_balance
     AFTER INSERT ON transactions
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION transactions_balance_check();
 
-CREATE CONSTRAINT TRIGGER postings_must_balance
-    AFTER INSERT ON postings
+CREATE CONSTRAINT TRIGGER balance_checks_must_balance
+    AFTER INSERT ON balance_checks
     DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW EXECUTE FUNCTION postings_balance_check();
+    FOR EACH ROW EXECUTE FUNCTION queued_balance_check();
 
 -- Append-only: without this, a committed posting could be deleted.
 CREATE FUNCTION reject_mutation() RETURNS trigger

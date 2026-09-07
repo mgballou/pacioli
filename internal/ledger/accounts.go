@@ -12,6 +12,20 @@ import (
 // ErrAccountExists means the code is already held.
 var ErrAccountExists = errors.New("an account already holds that code")
 
+// CodeShape and NameShape put accounts_code_check and accounts_name_check, the
+// CHECKs in internal/schema, into words a client can act on. MaxCode and MaxName
+// are the lengths those words allow, counted in characters and not bytes.
+const (
+	MaxCode = 64
+	MaxName = 100
+)
+
+var (
+	CodeShape = fmt.Sprintf(
+		"1 to %d characters: a lower-case letter, then lower-case letters, digits, underscores and dots", MaxCode)
+	NameShape = fmt.Sprintf("1 to %d characters, and not only spaces", MaxName)
+)
+
 // An Account is the chart-of-accounts row a client asks for. The id and the
 // creation time are the database's.
 type Account struct {

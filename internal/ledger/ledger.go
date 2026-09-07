@@ -51,6 +51,13 @@ func (e *LegError) Error() string {
 // Unwrap keeps errors.Is working through a LegError.
 func (e *LegError) Unwrap() error { return e.Err }
 
+// DescriptionShape puts transactions_description_check, the CHECK in
+// internal/schema, into words a client can act on. MaxDescription is the length
+// those words allow, counted in characters and not bytes.
+const MaxDescription = 500
+
+var DescriptionShape = fmt.Sprintf("1 to %d characters, and not only spaces", MaxDescription)
+
 // A Leg is one side of a transaction: an account code and a signed amount in
 // minor units. Debit is positive, credit negative, and the sides must cancel.
 type Leg struct {
@@ -80,7 +87,7 @@ func (e Entry) net() (Minor, int) {
 }
 
 // balanceConstraints names the two deferred triggers Post settles, and no others.
-const balanceConstraints = "transactions_must_balance, postings_must_balance"
+const balanceConstraints = "transactions_must_balance, balance_checks_must_balance"
 
 // savepoint is reused: a second SAVEPOINT of the same name hides the first.
 const savepoint = "ledger_post"

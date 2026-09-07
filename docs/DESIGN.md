@@ -1,6 +1,6 @@
 # Design
 
-Fifteen decisions, each in the same shape: what it does, the obvious
+Seventeen decisions, each in the same shape: what it does, the obvious
 alternative, and why that alternative is wrong. The code carries almost no
 argument in its comments. This is where the argument lives.
 
@@ -384,3 +384,106 @@ which replaces the function body and touches no row. `internal/schema` applies
 `0001_ledger.sql` only to a database that does not have it yet, so an existing
 book needs that one statement run by hand. There is no migration framework and
 this did not earn one.
+
+## 16. Every quantity a client sends is bounded, and the bound is a number
+
+**What it does.** A code is at most 64 characters, a name 100, a description
+500, and an entry 1,000 legs. The three lengths are `CHECK`s in the schema; the
+leg count is a refusal in `internal/ledgerhttp`. Each refusal names the rule in
+words, hands back a trimmed value, and says how long the value actually was.
+
+**The obvious alternative.** The 1 MB request body already caps all of it. Lower
+it and be done.
+
+**Why that is wrong.** A body limit is a backstop, not a bound. It says nothing
+about any one field, so every field inherits the whole of it: a description ran
+to a megabyte, an account code of 100 kB came back out as a URL path segment, and
+four accounts answered `GET /v1/accounts` with 1,000,655 bytes because a report
+reads every name back in full. Lowering the body limit moves that number without
+naming any of them, and it breaks a legitimate large entry to fix a description.
+
+Every guard in this repo was about meaning — does it balance, does the currency
+match, is the kind real — and none was about size. Meaning and size are different
+questions and a rule that answers one does not answer the other.
+
+The numbers themselves:
+
+- **64 characters for a code.** It is a URL path segment and a report heading.
+  `assets.cash.operating.gbp` is 25. The shape was always a character class, so
+  the length goes inside the same regex and stays one constraint, which is what
+  lets a refusal read the field name off the constraint name.
+- **100 for a name.** It is a line on a trial balance. Anything longer is a
+  description that has gone in the wrong field.
+- **500 for a description.** A memo line, not a document. Long enough for a
+  sentence and a reference, short enough that a list of entries stays readable.
+- **1,000 legs for an entry.** Most entries have two. A consolidated payroll or
+  settlement journal has hundreds. A thousand is past all of them, and it is the
+  number that holds one request to a thousand round trips and a response of tens
+  of kilobytes. The 1 MB body was allowing 20,900 of the legs this repo's own
+  demo writes, and one such request took 21.6 seconds end to end.
+
+The lengths are written twice — once in the `CHECK`, once in `internal/ledger` so
+a refusal can say them — and a test reads `pg_get_constraintdef` back and fails
+if the two ever disagree.
+
+**What this does to a book that already exists.** A book already holding a value
+past one of these bounds keeps it: the `CHECK`s are on the write path and nothing
+rewrites a row. Adding them to an existing database needs the rows to pass first,
+so it is three statements and a look at what they refuse:
+
+    SELECT code FROM accounts WHERE code !~ '^[a-z][a-z0-9_.]{0,63}$';
+    SELECT code FROM accounts WHERE char_length(name) > 100;
+    SELECT id   FROM transactions WHERE char_length(description) > 500;
+
+and then the `CHECK`s themselves. There is no migration framework and this did
+not earn one.
+
+## 17. The balance check is queued once for an entry, not once per leg
+
+**What it does.** A posting queues its transaction id in `balance_checks`, once,
+by primary key conflict. The deferred constraint trigger hangs off *that* table,
+sums the entry once, and deletes the row it fired on.
+
+**The obvious alternative.** The constraint trigger on `postings`, which is what
+it was.
+
+**Why that is wrong.** It was `FOR EACH ROW DEFERRED`, so an *n*-leg entry queued
+*n* checks and each one summed *n* postings. The cost of writing an entry was
+quadratic in its legs, and the only ceiling was the request body:
+
+| legs | write, before | check, before | write, after | check, after |
+|---|---|---|---|---|
+| 1,000 | 16 ms | 63 ms | 22 ms | 1.0 ms |
+| 2,000 | 30 ms | 208 ms | 39 ms | 0.4 ms |
+| 4,000 | 56 ms | 829 ms | 86 ms | 0.8 ms |
+| 8,000 | 116 ms | 2,964 ms | 170 ms | 1.3 ms |
+| 16,000 | 239 ms | 12,573 ms | 350 ms | 1.8 ms |
+
+Postgres 18.6, the container in `compose.test.yaml`, legs written in one
+statement, `SET CONSTRAINTS ALL IMMEDIATE` timed on its own. The check is now
+flat: one sum, whatever the leg count. The write is about half as much again,
+because every leg now probes one primary key, and that is the trade — a bounded
+cost per leg for a cost per entry that no longer squares.
+
+**The obvious fix, and why it is not available.** Make the trigger
+`FOR EACH STATEMENT` and keep it deferred. Postgres will not take it:
+
+    CREATE CONSTRAINT TRIGGER t AFTER INSERT ON postings
+        DEFERRABLE INITIALLY DEFERRED FOR EACH STATEMENT ...
+    ERROR:  syntax error at or near "STATEMENT"
+
+`CREATE CONSTRAINT TRIGGER` takes `FOR EACH ROW` and nothing else, it will not
+take a `REFERENCING` transition table either, and a plain `CREATE TRIGGER` will
+not take `DEFERRABLE`. Deferral and statement scope cannot be had on the same
+trigger. So the deferred check moves to a table that already has one row per
+entry, and a plain immediate row trigger on `postings` is what puts it there.
+
+It would not have helped anyway: `ledger.Post` writes one statement per leg, so
+that it can name the leg a refusal was about. A statement trigger would have
+fired once per leg too.
+
+**Why the queue row is deleted.** So that legs added after a check queue another
+one. Without the delete, an entry could be settled and then quietly unbalanced by
+an append. The row never outlives the transaction that wrote it, and the entry
+with no legs at all still has `transactions_must_balance` over it, because an
+entry with no legs queues nothing.

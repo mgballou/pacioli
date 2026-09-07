@@ -1,0 +1,12 @@
+# Without the delete, the check runs once and never again: a leg added after it
+# queues nothing, and a settled entry can be quietly unbalanced.
+
+title: a leg added after the balance check is never checked
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestALegAddedAfterACheckIsCheckedAgain -v ./internal/schema/
+--- before
+    PERFORM assert_transaction_balances(NEW.transaction_id);
+    DELETE FROM balance_checks WHERE transaction_id = NEW.transaction_id;
+--- after
+    PERFORM assert_transaction_balances(NEW.transaction_id);
+    -- negative control: the queue row stays, so nothing queues a second check

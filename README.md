@@ -143,14 +143,29 @@ those is Postgres refusing. No validation branch in Go decides either status.
 An unbalanced entry comes back with the arithmetic of what was sent: how far out,
 over how many legs.
 
+**Every quantity a client controls is bounded, and the refusal says the number.**
+A code is at most 64 characters, a name 100, a description 500, an entry 1,000
+legs. A value past one of those answers 422 with the rule in words, a trimmed
+value, and `characters`: how long the value actually was, which a trimmed value
+cannot say. The 1 MB request body is a backstop behind all of them, not the
+bound — it is what let one entry carry 20,900 legs, 21 seconds inside a single
+request, and four accounts answer a report with a megabyte.
+
 ## The schema
 
 `internal/schema/0001_ledger.sql` is the whole of it, hand-written.
 
 Postings and transactions are append-only. A mistake is corrected with a
-reversing transaction. Both balance triggers are `INITIALLY DEFERRED`, so an
-entry can go in one leg at a time and still has to balance by the end of the
+reversing transaction. The balance triggers are `INITIALLY DEFERRED`, so an entry
+can go in one leg at a time and still has to balance by the end of the
 transaction.
+
+A deferred check has to be `FOR EACH ROW` — Postgres has no deferred statement
+trigger — so one hung straight off `postings` summed the whole entry once per
+leg. A leg queues its transaction id in `balance_checks` instead, once, and the
+deferred check hangs off that. The check is one sum however many legs arrive, and
+it clears its own row so a leg added later queues another. `docs/DESIGN.md`
+decision 17 has the measurements.
 
 ## Writing to it
 

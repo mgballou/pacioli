@@ -11,13 +11,14 @@ import (
 // refusal is every field a refusal can carry. Each test below reads the whole
 // thing, because what a client is owed is the value it sent as much as the rule.
 type refusal struct {
-	Error     string   `json:"error"`
-	Code      string   `json:"code"`
-	Parameter string   `json:"parameter"`
-	Value     string   `json:"value"`
-	Expected  string   `json:"expected"`
-	Valid     []string `json:"valid"`
-	See       string   `json:"see"`
+	Error      string   `json:"error"`
+	Code       string   `json:"code"`
+	Parameter  string   `json:"parameter"`
+	Value      string   `json:"value"`
+	Expected   string   `json:"expected"`
+	Characters int      `json:"characters"`
+	Valid      []string `json:"valid"`
+	See        string   `json:"see"`
 }
 
 // kinds is the closed set account_kind holds. A refusal about a kind has to

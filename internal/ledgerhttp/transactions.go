@@ -24,6 +24,15 @@ import (
 // maxRequestBody bounds what will be read from a client body.
 const maxRequestBody = 1 << 20
 
+// maxPostings bounds the legs one entry may carry.
+//
+// The 1 MB body is a backstop, not a bound: it let one entry carry 20,900 legs
+// and take 21 seconds. A thousand is past anything double entry produces — most
+// entries have two, a consolidated payroll or settlement journal has hundreds —
+// and it holds one request to a thousand round trips and a response of tens of
+// kilobytes rather than a megabyte.
+const maxPostings = 1000
+
 // The headers the idempotency contract is carried on.
 const (
 	keyHeader      = "Idempotency-Key"
@@ -123,6 +132,17 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 			Error:    "the request body carries more than one json value",
 			Expected: "one json object, and nothing after it",
 			See:      docs.Home,
+		})
+		return
+	}
+
+	if n := len(req.Postings); n > maxPostings {
+		s.write(w, r, http.StatusUnprocessableEntity, errorBody{
+			Error:     "the entry carries more postings than this endpoint takes",
+			Parameter: "postings",
+			Value:     strconv.Itoa(n),
+			Expected:  fmt.Sprintf("at most %d postings", maxPostings),
+			See:       docs.Home,
 		})
 		return
 	}
@@ -347,7 +367,7 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 	var leg *ledger.LegError
 	if errors.As(err, &leg) {
 		named.Parameter = fmt.Sprintf("postings[%d]", leg.Index)
-		named.Code = leg.Account
+		named.Code = shown(leg.Account)
 	}
 
 	named.See = docs.Home
@@ -387,7 +407,7 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 
 	case errors.Is(err, ledger.ErrCurrencyMismatch):
 		named.Error = "the account does not hold the transaction's currency"
-		named.Value = req.Currency
+		named.Value = shown(req.Currency)
 		// One account holds one currency, so the closed set here has one member.
 		if leg != nil && leg.Holds != "" {
 			named.Valid = []string{leg.Holds}
@@ -403,7 +423,11 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 			if leg == nil {
 				named.Parameter = field
 			}
-			named.Value = req.value(field, leg)
+			// shown, not the value itself: a description the schema refused
+			// for its length would otherwise be handed back in full.
+			value := req.value(field, leg)
+			named.Value = shown(value)
+			bound(&named, field, value)
 		}
 		s.write(w, r, http.StatusUnprocessableEntity, named)
 

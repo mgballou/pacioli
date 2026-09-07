@@ -4,7 +4,7 @@ title: an account code is not unique and the same code opens twice
 file: internal/schema/0001_ledger.sql
 run: make db-reset && go test -count=1 -run TestOpeningACodeTwiceIsAConflict -v ./internal/ledgerhttp/
 --- before
-    code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]*$'),
+    code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]{0,63}$'),
 --- after
     -- negative control: two accounts may hold one code
-    code       text NOT NULL CHECK (code ~ '^[a-z][a-z0-9_.]*$'),
+    code       text NOT NULL CHECK (code ~ '^[a-z][a-z0-9_.]{0,63}$'),

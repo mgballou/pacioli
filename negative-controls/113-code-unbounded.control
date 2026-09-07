@@ -1,0 +1,11 @@
+# Without the length in the shape, a 100 kB account code is held and comes back
+# out as a URL path segment.
+
+title: an account code of a hundred kilobytes is held
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestAnOverLongAccountCodeIsRefusedWithTheRuleAndTheLength -v ./internal/ledgerhttp/
+--- before
+    code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]{0,63}$'),
+--- after
+    -- negative control: the code is shaped and not bounded
+    code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]*$'),
