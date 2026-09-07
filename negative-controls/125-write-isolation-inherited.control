@@ -5,6 +5,6 @@ title: a write inherits its isolation level instead of naming it
 file: internal/ledgerhttp/ledgerhttp.go
 run: go test -count=1 -run TestPoolLendsAWriteAtReadCommitted -v ./internal/ledgerhttp/
 --- before
-	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := c.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 --- after
-	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	tx, err := c.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})

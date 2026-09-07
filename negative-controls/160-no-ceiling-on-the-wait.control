@@ -1,0 +1,14 @@
+# With no ceiling on the wait for a connection, a request past what the pool of
+# sixteen can serve queues until its whole budget is gone and is refused anyway.
+
+title: the wait for one of the pool's sixteen connections is unbounded
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestARequestTheBusyPoolCannotServeIsRefusedAtTheCeiling -v ./internal/ledgerhttp/
+--- before
+	if p.Acquire <= 0 {
+		return p.DB.Conn(ctx)
+	}
+--- after
+	if true {
+		return p.DB.Conn(ctx)
+	}

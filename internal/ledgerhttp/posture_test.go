@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -323,4 +325,219 @@ func postTyped(t *testing.T, url, contentType, body string) (*http.Response, []b
 		t.Fatalf("read %s: %v", url, err)
 	}
 	return res, got
+}
+
+// The ceiling on the wait for a connection. Without it a request past what the
+// pool of sixteen can serve waits its whole budget and is refused anyway, so
+// the client waits fifteen seconds for a no and the server holds the memory
+// throughout. DESIGN.md 24.
+func TestARequestTheBusyPoolCannotServeIsRefusedAtTheCeiling(t *testing.T) {
+	const ceiling = 100 * time.Millisecond
+
+	for _, c := range []struct {
+		name string
+		lend func(ledgerhttp.Pool) func(context.Context, func(*sql.Tx) error) error
+	}{
+		{"a read", func(p ledgerhttp.Pool) func(context.Context, func(*sql.Tx) error) error { return p.Read }},
+		{"a write", func(p ledgerhttp.Pool) func(context.Context, func(*sql.Tx) error) error { return p.Write }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := ledgerhttp.Pool{DB: oneConnection(t), Acquire: ceiling}
+
+			// One reader holds the only connection there is, which is the pool
+			// of sixteen with every one of them out.
+			held, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = pool.Read(context.Background(), func(*sql.Tx) error {
+					close(held)
+					<-release
+					return nil
+				})
+			}()
+			<-held
+
+			// The refusal is awaited rather than blocked on: without the
+			// ceiling nothing comes back until the connection does, and this
+			// test would read as a hang rather than as a failure.
+			var lent atomic.Bool
+			refused := make(chan error, 1)
+			started := time.Now()
+			go func() {
+				refused <- c.lend(pool)(context.Background(), func(*sql.Tx) error {
+					lent.Store(true)
+					return nil
+				})
+			}()
+
+			var err error
+			var waited bool
+			select {
+			case err = <-refused:
+			case <-time.After(2 * time.Second):
+				waited = true
+			}
+			took := time.Since(started)
+			close(release)
+			<-done
+			if waited {
+				<-refused
+				t.Fatalf("nothing came back in %s, so the wait for a connection has no ceiling on it", took)
+			}
+			if lent.Load() {
+				t.Error("the transaction ran, so the only connection was lent twice")
+			}
+
+			var busy *ledgerhttp.OverloadError
+			if !errors.As(err, &busy) {
+				t.Fatalf("%s waiting on a full pool gave %v, want an OverloadError", c.name, err)
+			}
+			if busy.Ceiling != ceiling {
+				t.Errorf("the refusal names %s, want the ceiling of %s", busy.Ceiling, ceiling)
+			}
+			if took > time.Second {
+				t.Errorf("the refusal took %s, want about the ceiling of %s", took, ceiling)
+			}
+		})
+	}
+}
+
+// The ceiling is on the wait for a connection and on nothing else. Put it on
+// the transaction too and every request longer than it is cut off mid-answer.
+func TestTheCeilingBoundsTheWaitAndNotTheWork(t *testing.T) {
+	const (
+		ceiling = 100 * time.Millisecond
+		work    = 500 * time.Millisecond
+	)
+	pool := ledgerhttp.Pool{DB: testdb.Open(t), Acquire: ceiling}
+
+	ctx := context.Background()
+	started := time.Now()
+	if err := pool.Read(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_sleep($1)`, work.Seconds()); err != nil {
+			return err
+		}
+		// A second statement, so a transaction the ceiling has already ended is
+		// found out rather than merely raced with.
+		var one int
+		return tx.QueryRowContext(ctx, `SELECT 1`).Scan(&one)
+	}); err != nil {
+		t.Fatalf("a read that works for %s under a ceiling of %s: %v", work, ceiling, err)
+	}
+	if took := time.Since(started); took < work {
+		t.Errorf("the read came back in %s, want at least the %s of work it was given", took, work)
+	}
+}
+
+// A pool with no ceiling waits, which is what every one of them did.
+func TestAPoolWithNoCeilingWaitsForItsConnection(t *testing.T) {
+	pool := ledgerhttp.Pool{DB: oneConnection(t)}
+
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = pool.Read(context.Background(), func(*sql.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	waiting := make(chan error, 1)
+	go func() {
+		waiting <- pool.Read(context.Background(), func(*sql.Tx) error { return nil })
+	}()
+
+	select {
+	case err := <-waiting:
+		t.Fatalf("a read on a full pool with no ceiling came back with %v, want it still waiting", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(release)
+	<-done
+	if err := <-waiting; err != nil {
+		t.Errorf("the read that waited its turn: %v", err)
+	}
+}
+
+// The refusal, on every endpoint that lends a transaction: 503, Retry-After,
+// and the body every other refusal here has.
+func TestABusyPoolIsRefusedWith503AndRetryAfter(t *testing.T) {
+	const ceiling = 2 * time.Second
+
+	var logged bytes.Buffer
+	h := ledgerhttp.Handler(storeFunc(func(context.Context, func(*sql.Tx) error) error {
+		return fmt.Errorf("take a connection for the read: %w", &ledgerhttp.OverloadError{Ceiling: ceiling})
+	}), log.New(&logged, "", 0))
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	for _, call := range []struct {
+		what string
+		do   func() (*http.Response, []byte)
+	}{
+		{"GET /v1/accounts", func() (*http.Response, []byte) { return get(t, srv.URL+"/v1/accounts") }},
+		{"GET /v1/trial-balance", func() (*http.Response, []byte) { return get(t, srv.URL+"/v1/trial-balance") }},
+		{"POST /v1/accounts", func() (*http.Response, []byte) {
+			return postTyped(t, srv.URL+"/v1/accounts", jsonType,
+				`{"code":"assets.cash","name":"Cash","kind":"asset","currency":"GBP"}`)
+		}},
+		{"POST /v1/transactions", func() (*http.Response, []byte) {
+			return postTyped(t, srv.URL+"/v1/transactions", jsonType,
+				`{"currency":"GBP","description":"x","postings":[]}`)
+		}},
+	} {
+		t.Run(call.what, func(t *testing.T) {
+			res, body := call.do()
+			if res.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("status %d, want 503: %s", res.StatusCode, body)
+			}
+			if got := res.Header.Get("Retry-After"); got != "2" {
+				t.Errorf("Retry-After %q, want the ceiling of %s in whole seconds", got, ceiling)
+			}
+			if ct := res.Header.Get("Content-Type"); ct != jsonType {
+				t.Errorf("content-type %q, want %s", ct, jsonType)
+			}
+
+			var refusal struct {
+				Error    string `json:"error"`
+				Expected string `json:"expected"`
+				See      string `json:"see"`
+			}
+			if err := json.Unmarshal(body, &refusal); err != nil {
+				t.Fatalf("unmarshal %q: %v", body, err)
+			}
+			if refusal.Error == "" || refusal.See == "" {
+				t.Errorf("the refusal says %+v, want a reason and somewhere to read the rule", refusal)
+			}
+			if !strings.Contains(refusal.Expected, ceiling.String()) {
+				t.Errorf("expected = %q, want the ceiling %s in it", refusal.Expected, ceiling)
+			}
+		})
+	}
+
+	if logged.Len() != 0 {
+		t.Errorf("a busy pool was logged as a cause behind a 500: %s", logged.String())
+	}
+}
+
+// oneConnection is a pool of one, which is the pool of sixteen with fifteen
+// already lent. The shared pool cannot be used: its size belongs to every other
+// test in the package.
+func oneConnection(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("pgx", testdb.DSN())
+	if err != nil {
+		t.Fatalf("open %s: %v", testdb.DSN(), err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+
+	if err := db.Ping(); err != nil {
+		t.Fatalf("reach the test database at %s: %v\n\nStart it with: make db-up", testdb.DSN(), err)
+	}
+	return db
 }

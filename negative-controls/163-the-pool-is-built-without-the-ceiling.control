@@ -1,0 +1,10 @@
+# The flag can hold whatever it likes if the pool the handler is given never
+# carries it.
+
+title: the handler is given a pool with no ceiling on the wait
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestTheHandlerIsGivenThePoolsCeiling -v ./cmd/pacioli/
+--- before
+	return ledgerhttp.Pool{DB: db, Acquire: d.acquire}
+--- after
+	return ledgerhttp.Pool{DB: db}

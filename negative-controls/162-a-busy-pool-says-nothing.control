@@ -1,0 +1,13 @@
+# A pool with nothing to lend is the one refusal here that knows when to come
+# back. Answered as a plain cancellation it loses Retry-After and the ceiling,
+# and the client is left to guess.
+
+title: a request the pool had no connection for is answered without Retry-After
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestABusyPoolIsRefusedWith503AndRetryAfter -v ./internal/ledgerhttp/
+--- before
+	case errors.As(err, &busy):
+		s.busy(w, r, busy.Ceiling)
+--- after
+	case errors.As(err, &busy):
+		s.gaveUp(w, r)

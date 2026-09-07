@@ -52,6 +52,7 @@ const (
 	readHeaderGrace = 10 * time.Second
 	readGrace       = 30 * time.Second
 	requestGrace    = 15 * time.Second
+	acquireGrace    = 2 * time.Second
 	writeGrace      = 45 * time.Second
 	idleGrace       = 120 * time.Second
 )
@@ -75,6 +76,7 @@ type deadlines struct {
 	readHeader time.Duration
 	read       time.Duration
 	request    time.Duration
+	acquire    time.Duration
 	write      time.Duration
 	idle       time.Duration
 }
@@ -101,6 +103,7 @@ func graces(d *deadlines) []grace {
 		{"read-header-timeout", "close a connection that opens and then sends no headers", readHeaderGrace, &d.readHeader},
 		{"read-timeout", "close a connection that has not finished sending its request", readGrace, &d.read},
 		{"request-timeout", "answer 503 and cancel the database work behind a request that runs past this", requestGrace, &d.request},
+		{"acquire-timeout", "answer 503 to a request that has waited this long for one of the pool's sixteen connections", acquireGrace, &d.acquire},
 		{"write-timeout", "close a connection whose response cannot be handed over", writeGrace, &d.write},
 		{"idle-timeout", "close a kept-alive connection that is carrying nothing", idleGrace, &d.idle},
 	}
@@ -251,7 +254,15 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 		return fmt.Errorf("listen on %s: %w\n\nAsk for another with -addr, or $%s", cfg.addr, err, addrEnv)
 	}
 
-	return serveOn(ctx, ln, ledgerhttp.Handler(ledgerhttp.Pool{DB: db}, lg), cfg.deadlines, lg)
+	return serveOn(ctx, ln, ledgerhttp.Handler(store(db, cfg.deadlines), lg), cfg.deadlines, lg)
+}
+
+// store is what the handler is given: the pool, and the ceiling on how long a
+// request may wait for one of its sixteen connections. Without the ceiling a
+// request past what the pool can serve waits its whole budget to be refused.
+// DESIGN.md 24.
+func store(db *sql.DB, d deadlines) ledgerhttp.Pool {
+	return ledgerhttp.Pool{DB: db, Acquire: d.acquire}
 }
 
 // open connects and proves the connection, because sql.Open does neither.
@@ -269,7 +280,8 @@ func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	db := stdlib.OpenDB(*cfg)
 
 	// The default is unlimited, which can exhaust Postgres's own connection
-	// limit under load.
+	// limit under load. What happens to a request past the sixteenth is
+	// -acquire-timeout's, and DESIGN.md 24's.
 	db.SetMaxOpenConns(16)
 	db.SetMaxIdleConns(8)
 	db.SetConnMaxLifetime(30 * time.Minute)

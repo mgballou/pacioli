@@ -46,7 +46,44 @@ type Store interface {
 
 // Pool works through a connection pool, one transaction per call, so a response
 // built from two statements is built from one snapshot of the ledger.
-type Pool struct{ DB *sql.DB }
+type Pool struct {
+	DB *sql.DB
+
+	// Acquire is how long a request may wait for one of the pool's
+	// connections before it is refused. Zero is no ceiling; the server refuses
+	// zero where the flag is read. DESIGN.md 24.
+	Acquire time.Duration
+}
+
+// An OverloadError is a request the pool had no connection to lend inside
+// Acquire. Nothing was begun, so nothing was written and the request can be
+// sent again.
+type OverloadError struct{ Ceiling time.Duration }
+
+func (e *OverloadError) Error() string {
+	return fmt.Sprintf("no connection out of the pool within %s", e.Ceiling)
+}
+
+// conn takes one of the pool's connections, waiting at most p.Acquire for it.
+//
+// The ceiling is on the wait alone. ctx goes on to carry the transaction, so a
+// request that gets a connection keeps the whole of its budget to work in, and
+// one that does not is refused now rather than at the end of that budget.
+func (p Pool) conn(ctx context.Context) (*sql.Conn, error) {
+	if p.Acquire <= 0 {
+		return p.DB.Conn(ctx)
+	}
+	waited, cancel := context.WithTimeout(ctx, p.Acquire)
+	defer cancel()
+
+	c, err := p.DB.Conn(waited)
+	// The request's own budget running out, or the client going away, is the
+	// refusal cancelled already names. This is the queue being too deep.
+	if err != nil && ctx.Err() == nil && waited.Err() != nil {
+		return nil, &OverloadError{Ceiling: p.Acquire}
+	}
+	return c, err
+}
 
 // Read implements Reader, on a transaction Postgres will not let a handler
 // write through. REPEATABLE READ is what makes the one-snapshot claim above
@@ -54,7 +91,13 @@ type Pool struct{ DB *sql.DB }
 // response built from two of them can be built from two different ledgers.
 // DESIGN.md 19.
 func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
-	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{
+	c, err := p.conn(ctx)
+	if err != nil {
+		return fmt.Errorf("take a connection for the read: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	tx, err := c.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})
@@ -72,7 +115,13 @@ func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
 // a row another transaction committed after this one began, and only a snapshot
 // taken per statement can see it. DESIGN.md 19.
 func (p Pool) Write(ctx context.Context, f func(tx *sql.Tx) error) error {
-	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	c, err := p.conn(ctx)
+	if err != nil {
+		return fmt.Errorf("take a connection for the write: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	tx, err := c.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin the write: %w", err)
 	}
@@ -177,6 +226,45 @@ func (s *server) gaveUp(w http.ResponseWriter, r *http.Request) {
 		Expected: "the same request again; a write carries its idempotency key, so sending it twice cannot post it twice",
 		See:      docs.Home,
 	})
+}
+
+// notReached answers a request the ledger never got to, and reports whether it
+// did. Every handler asks this before it reads an error as a refusal, because
+// neither of these is one.
+func (s *server) notReached(w http.ResponseWriter, r *http.Request, err error) bool {
+	var busy *OverloadError
+	switch {
+	case errors.As(err, &busy):
+		s.busy(w, r, busy.Ceiling)
+	case cancelled(err):
+		s.gaveUp(w, r)
+	default:
+		return false
+	}
+	return true
+}
+
+// busy answers a request the pool had no connection for. It carries Retry-After
+// because it is the one refusal here that says when: the queue was full for the
+// ceiling, so that is how long the client is asked to leave it. DESIGN.md 24.
+func (s *server) busy(w http.ResponseWriter, r *http.Request, ceiling time.Duration) {
+	w.Header().Set("Retry-After", retryAfter(ceiling))
+	s.write(w, r, http.StatusServiceUnavailable, errorBody{
+		Error:    "the ledger is busy and had no free connection for this request, so nothing was written",
+		Expected: "the same request again after " + ceiling.String() + "; a write carries its idempotency key, so sending it twice cannot post it twice",
+		See:      docs.Home,
+	})
+}
+
+// retryAfter is the ceiling in the whole seconds Retry-After is counted in,
+// rounded up and never zero: a client told to come back in no time at all comes
+// straight back.
+func retryAfter(d time.Duration) string {
+	seconds := (d + time.Second - 1) / time.Second
+	if seconds < 1 {
+		seconds = 1
+	}
+	return strconv.FormatInt(int64(seconds), 10)
 }
 
 // tookTooLong is the body a request that ran out of budget is answered with,
@@ -513,11 +601,12 @@ func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 // fail turns an error from internal/ledger into a status. named carries whatever
 // part of the request is worth handing back.
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named errorBody) {
+	if s.notReached(w, r, err) {
+		return
+	}
+
 	named.See = docs.Home
 	switch {
-	case cancelled(err):
-		s.gaveUp(w, r)
-		return
 	case errors.Is(err, ledger.ErrUnknownAccount):
 		named.Error = "no such account"
 		s.write(w, r, http.StatusNotFound, named)

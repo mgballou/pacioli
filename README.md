@@ -304,6 +304,7 @@ underscores:
     -read-header-timeout 10s   a connection that opens and sends no headers
     -read-timeout        30s   the whole request off the wire
     -request-timeout     15s   the handler, and the database work behind it
+    -acquire-timeout      2s   the wait for one of the pool's sixteen connections
     -write-timeout       45s   the socket, once the two above have been missed
     -idle-timeout       120s   a kept-alive connection carrying nothing
 
@@ -314,9 +315,29 @@ request it has not finished reading. A write cut off either way has written
 nothing and can be sent again under the same idempotency key. Zero is refused,
 because zero is what Go reads as no deadline at all.
 
+**A busy ledger says so in two seconds.** The pool holds sixteen connections.
+A request that has waited `-acquire-timeout` for one of them is answered 503
+with `Retry-After`, having begun no transaction and written nothing:
+
+    HTTP/1.1 503 Service Unavailable
+    Content-Type: application/json
+    Retry-After: 2
+
+    {
+      "error": "the ledger is busy and had no free connection for this request, so nothing was written",
+      "expected": "the same request again after 2s; a write carries its idempotency key, so sending it twice cannot post it twice",
+      "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+    }
+
+Four hundred concurrent 1,000-leg writes against the sixteen: the ceiling turns
+a refusal that arrived at 15.2 s into one that arrives at 2.2 s, and holds
+`GET /v1/accounts` to 1.96 s where it reached 13.7 s. `docs/DESIGN.md` 24 has
+both runs and where the two seconds came from.
+
 Every connection to Postgres carries `statement_timeout=20s`, `lock_timeout=10s`
 and `idle_in_transaction_session_timeout=30s`. Set one of those on the connection
-string to move it. The reasoning for all eight numbers is `docs/DESIGN.md` 18.
+string to move it. The reasoning for all nine numbers is `docs/DESIGN.md` 18 and
+24.
 
 The ledger is empty until something opens an account on it. There is no seed data
 anywhere in this repository. Ctrl-C stops the server, and it finishes the requests

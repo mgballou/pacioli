@@ -1,0 +1,10 @@
+# A ceiling at or above the request budget never fires: the budget refuses the
+# request first, at fifteen seconds, which is the state this ended.
+
+title: the ceiling on the wait is set past the request budget
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestTheHandlerIsGivenThePoolsCeiling -v ./cmd/pacioli/
+--- before
+	acquireGrace    = 2 * time.Second
+--- after
+	acquireGrace    = 20 * time.Second

@@ -362,10 +362,12 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 		named.Code = shown(leg.Account)
 	}
 
+	if s.notReached(w, r, err) {
+		return
+	}
+
 	named.See = docs.Home
 	switch {
-	case cancelled(err):
-		s.gaveUp(w, r)
 	case errors.Is(err, ledger.ErrKeyReused):
 		// What the key was first used for belongs to whoever sent it first.
 		s.write(w, r, http.StatusConflict, errorBody{

@@ -71,10 +71,11 @@ func (req accountRequest) value(field string) string {
 
 // refuseAccount turns the ledger's sentinel errors into a status.
 func (s *server) refuseAccount(w http.ResponseWriter, r *http.Request, err error, req accountRequest) {
-	switch {
-	case cancelled(err):
-		s.gaveUp(w, r)
+	if s.notReached(w, r, err) {
+		return
+	}
 
+	switch {
 	case errors.Is(err, ledger.ErrAccountExists):
 		// Which account holds it stays out of the body; See points at what
 		// serves that.

@@ -1,0 +1,19 @@
+# The ceiling is on the wait for a connection alone. Put it on the transaction
+# as well and every read longer than two seconds is cut off in the middle of
+# working, which is the opposite of what it is for.
+
+title: the ceiling on the wait is put on the transaction too
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestTheCeilingBoundsTheWaitAndNotTheWork -v ./internal/ledgerhttp/
+--- before
+	tx, err := c.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
+--- after
+	bounded, stop := context.WithTimeout(ctx, p.Acquire)
+	defer stop()
+	tx, err := c.BeginTx(bounded, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})

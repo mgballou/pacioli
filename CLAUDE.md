@@ -8,7 +8,7 @@ Read these first:
 
 - `CONTRIBUTING.md` — the Makefile targets, the conventions, and the traps that
   bite a test run. It is current.
-- `docs/DESIGN.md` — twenty-two decisions, each with the alternative it beat. A
+- `docs/DESIGN.md` — twenty-four decisions, each with the alternative it beat. A
   question shaped "why does this not…" is almost always answered there.
 
 `make all` (build, vet, staticcheck, race tests) has to pass before a change is

@@ -271,3 +271,19 @@ func one(name, value string) func(string) string {
 		return ""
 	}
 }
+
+// The pool the handler is given carries the ceiling on the wait for one of its
+// sixteen connections. Without it the pool is unbounded and a request past the
+// sixteenth waits its whole budget. DESIGN.md 24.
+func TestTheHandlerIsGivenThePoolsCeiling(t *testing.T) {
+	got := store(nil, deadlines{acquire: 7 * time.Second})
+	if got.Acquire != 7*time.Second {
+		t.Errorf("Acquire = %s, want the 7s it was configured with", got.Acquire)
+	}
+	if defaultDeadlines().acquire == 0 {
+		t.Error("the default ceiling is zero, which is no ceiling on the wait at all")
+	}
+	if d := defaultDeadlines(); d.acquire >= d.request {
+		t.Errorf("the ceiling on the wait is %s against a request budget of %s; it has to be well under it, or a request queues for its whole budget before it is refused", d.acquire, d.request)
+	}
+}

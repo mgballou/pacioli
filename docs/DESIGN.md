@@ -1,6 +1,6 @@
 # Design
 
-Twenty-two decisions, each in the same shape: what it does, the obvious
+Twenty-four decisions, each in the same shape: what it does, the obvious
 alternative, and why that alternative is wrong. The code carries almost no
 argument in its comments. This is where the argument lives.
 
@@ -889,3 +889,130 @@ statement, and it rewrites no row and changes no balance:
 A client that was reading the whole chart out of `GET /v1/accounts` now gets 100
 accounts and the address of the rest. That is an API change, and there is no
 version of this decision that is not one.
+
+---
+
+## 24. A request waits two seconds for a connection, not fifteen
+
+**What it does.** `ledgerhttp.Pool` takes the wait for one of the pool's sixteen
+connections as its own step, and holds it to `-acquire-timeout`, two seconds. A
+request that does not get a connection in that time is answered 503 with
+`Retry-After`, having begun no transaction. The ceiling is on the wait alone:
+once a request has a connection it has the whole of its 15-second budget to work
+in.
+
+    HTTP/1.1 503 Service Unavailable
+    Content-Type: application/json
+    Retry-After: 2
+
+    {
+      "error": "the ledger is busy and had no free connection for this request, so nothing was written",
+      "expected": "the same request again after 2s; a write carries its idempotency key, so sending it twice cannot post it twice",
+      "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+    }
+
+**The obvious alternative.** Decision 18 already bounds the request. A request
+that queues behind sixteen connections runs out of budget and is refused at
+fifteen seconds, so the ceiling exists and the queue is bounded through it.
+
+**Why that is wrong.** It is the most expensive way to say no. Four hundred
+concurrent 1,000-leg writes against the sixteen, with twenty readers alongside:
+
+    before   POST /v1/transactions   201  368  p50 7.87s   p95 14.50s  max 15.21s
+             POST /v1/transactions   503   32  p50 15.16s  p95 15.31s  max 15.37s
+             GET  /v1/accounts       200  109  p50 898ms   p95 11.14s  max 13.72s
+             the whole run took 15.38s
+
+Every refused request paid for its refusal twice: the client held a connection
+for fifteen seconds and the server held the memory behind it, and the answer was
+a failure either way. The reads paid for it too — 2 ms idle, 13.7 s under the
+writes — because a read queues at the same sixteen. Bounding the work, which
+decision 16 did, and bounding the request, which decision 18 did, both leave
+this alone: the request was neither working nor overdue, it was waiting in line.
+
+    after    POST /v1/transactions   201   64  p50 1.64s   p95 2.99s   max 3.08s
+             POST /v1/transactions   503  336  p50 2.20s   p95 2.34s   max 2.36s
+             GET  /v1/accounts       200  231  p50 26ms    p95 761ms   max 1.96s
+             GET  /v1/accounts       503   16  p50 2.04s   p95 2.10s   max 2.12s
+             the whole run took 3.90s
+
+Same load, same machine, same 15-second budget. The refusal arrives at 2.2 s
+rather than 15.2 s, the reads keep a 26 ms median, and the ledger afterwards
+holds exactly the 64 entries that were taken: 64,000 postings netting to zero,
+nothing half written. A shed request begins no transaction, so there is nothing
+for it to leave behind.
+
+**Where the two seconds came from.** The wait for a connection was measured
+directly, at seven concurrencies of 1,000-leg writes against the sixteen:
+
+| concurrent writes | wait p50 | p95 | max | refused |
+|---|---|---|---|---|
+| 8 | 2 ms | 5 ms | 5 ms | none |
+| 16 | 4 ms | 11 ms | 12 ms | none |
+| 32 | 23 ms | 1.23 s | 1.25 s | none |
+| 64 | 886 ms | 2.08 s | 2.37 s | none |
+| 128 | 2.13 s | 4.29 s | 4.40 s | none |
+| 200 | 3.80 s | 6.98 s | 7.45 s | none |
+| 400 | 12.48 s | 15.00 s | 15.00 s | 149 of 400 |
+
+A 1,000-leg entry is the largest this API takes and holds a connection for about
+a second, so sixteen of them drain about sixteen entries a second and the queue
+is a straight line: the ceiling admits about sixteen requests for every second
+it allows, and refuses the rest just after it.
+
+| ceiling | taken | refused | refused at |
+|---|---|---|---|
+| 1s | 32 | 368 | 1.24 s |
+| 2s | 64 | 336 | 2.20 s |
+| 4s | 112 | 288 | 4.26 s |
+| 8s | 198 | 202 | 8.26 s |
+| none | 368 | 32 | 15.16 s |
+
+So the number is a choice about how deep a queue the server will keep, and the
+floor under it is the load it must not refuse. Double entry produces entries of
+two legs — decision 16 says 1,000 is already past anything it produces — and
+four hundred concurrent two-leg writes wait 551 ms at the deepest. Against that
+load:
+
+| ceiling | of 400 two-leg writes, refused |
+|---|---|
+| 250ms | 188 |
+| 500ms | 1 |
+| 1s | none |
+| 2s | none |
+
+One second is the first ceiling that refuses nothing a real book would send.
+Two is twice that, about four times the deepest wait ever measured under
+ordinary load, and a seventh of the request budget, so a request refused by it
+has been told no at a seventh of the cost.
+
+**What it gives up, and it is real.** The server now refuses load it used to
+serve. A hundred and twenty-eight simultaneous 1,000-leg entries — 128,000
+postings at once — completed before, taking up to 4.4 s each to get a
+connection; most of them are now told to come back. That is the decision: the
+answer to a queue four seconds deep is a `Retry-After`, not a place in it. The
+work is not lost, because a refused write is a write that was never begun and
+carries its idempotency key still, and throughput is unchanged — sixteen
+connections drain at the rate sixteen connections drain, whether the queue in
+front of them is 32 deep or 368.
+
+**Why `Retry-After`, and why it is the ceiling.** It is the one refusal here
+that knows when. Every other one is about the request — a field, a key, a rule —
+and sending it again unchanged gets the same answer. This one is about the
+moment, so the client is told to come back, and the honest number is the ceiling
+itself: the queue was full for that long, so that is how long to leave it. It is
+sent in whole seconds, rounded up and never zero, because a client told to come
+back in no time at all comes straight back.
+
+**Why the ceiling is on the wait and not on the transaction.** `DB.Conn` takes a
+connection under a context of its own and hands back a `*sql.Conn` that outlives
+it; the transaction then begins under the request's context, as before. Put the
+two-second context on `BeginTx` as well and every read longer than two seconds
+is cut off in the middle of working, which is the opposite of the point. A
+control holds that line.
+
+**Why zero is unbounded here and refused at the flag.** `Pool` with no `Acquire`
+waits, which is what it did and what a test that hands the handler its own
+transaction still wants. The flag is where a deployer meets the number, and
+there zero is refused with the other five, for decision 18's reason: it would
+put the server back where it started and look like configuration while doing it.
