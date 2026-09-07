@@ -5,7 +5,8 @@ title: four account names make a megabyte of a four-row report
 file: internal/schema/0001_ledger.sql
 run: make db-reset && go test -count=1 -run TestFourAccountsCannotMakeAMegabyteOfAReport -v ./internal/ledgerhttp/
 --- before
-    name       text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100),
+    name       text NOT NULL CHECK (NOT is_blank(name) AND NOT has_control_character(name)
+                                    AND char_length(name) <= 100),
 --- after
     -- negative control: a name is bounded by the request body alone
-    name       text NOT NULL CHECK (btrim(name) <> ''),
+    name       text NOT NULL CHECK (NOT is_blank(name) AND NOT has_control_character(name)),

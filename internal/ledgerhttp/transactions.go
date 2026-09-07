@@ -185,7 +185,7 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		if err != nil || !rec.Replayed {
 			return err
 		}
-		stored, err = ledger.EntryOf(r.Context(), tx, rec.Transaction)
+		_, stored, err = ledger.EntryOf(r.Context(), tx, rec.Transaction)
 		return err
 	})
 	if err != nil {
@@ -193,19 +193,46 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The id is an address, not a receipt: GET /v1/transactions/{id} serves it,
+	// and it is the same header a replay carries.
+	w.Header().Set("Location", "/v1/transactions/"+rec.Transaction)
+
 	if rec.Replayed {
 		w.Header().Set(replayedHeader, "true")
 		s.write(w, r, http.StatusCreated, entryBody(rec.Transaction, stored))
 		return
 	}
 
-	// No Location header: nothing serves GET /v1/transactions/{id} yet.
 	s.write(w, r, http.StatusCreated, transactionBody{
 		Transaction: rec.Transaction,
 		Currency:    req.Currency,
 		Description: req.Description,
 		Postings:    req.Postings,
 	})
+}
+
+// transaction serves one entry the ledger holds, in the shape the write that
+// created it answered with.
+func (s *server) transaction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	// held, not id: Postgres takes a uuid in more spellings than it writes one
+	// in, so the answer carries the ledger's id and not the caller's version of it.
+	var (
+		held string
+		e    ledger.Entry
+	)
+	err := s.ledger.Read(r.Context(), func(tx *sql.Tx) error {
+		var err error
+		held, e, err = ledger.EntryOf(r.Context(), tx, id)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err, errorBody{Parameter: "id", Value: shown(id)})
+		return
+	}
+
+	s.write(w, r, http.StatusOK, entryBody(held, e))
 }
 
 // claimOf fingerprints a request, so a key reused with a different one can be
@@ -254,8 +281,8 @@ func (s *server) unreadable(w http.ResponseWriter, r *http.Request, err error, f
 		s.write(w, r, http.StatusBadRequest, errorBody{
 			Error:     "the field is not the type this endpoint takes",
 			Parameter: wrongType.Field,
-			Value:     wrongType.Value,
-			Expected:  jsonKind(wrongType.Type),
+			Value:     jsonValue(wrongType.Value),
+			Expected:  wants(wrongType.Field, wrongType.Type),
 			See:       docs.Home,
 		})
 		return
@@ -317,8 +344,50 @@ func jsonFields(t reflect.Type) []string {
 	return out
 }
 
+// shaped is every field the decoder's own words would misdescribe, with the rule
+// in words instead. json has one kind of number, so "number" is true of 100.5
+// and says nothing; what the ledger takes is the whole number of minor units.
+// The names are the json field names the endpoints take, and both endpoints
+// read this, because both decode through unreadable.
+var shaped = map[string]string{
+	"amount_minor": ledger.AmountShape,
+}
+
+// wants says what a field would have taken. The rule where a field has one, and
+// the json kind of its type where it does not.
+func wants(field string, t reflect.Type) string {
+	if shape, ok := shaped[leaf(field)]; ok {
+		return shape
+	}
+	return jsonKind(t)
+}
+
+// leaf is the last name in the path the decoder reports, so a field nested in an
+// array of objects — "postings.amount_minor" — is found by its own name.
+func leaf(field string) string {
+	if i := strings.LastIndex(field, "."); i >= 0 {
+		return field[i+1:]
+	}
+	return field
+}
+
+// jsonValue is what the body held. The decoder describes a number by its
+// literal — "number 100.5" — and every other kind by the kind alone, so the
+// literal is handed back on its own where there is one: it is the half of the
+// message a client can act on.
+func jsonValue(described string) string {
+	if literal, ok := strings.CutPrefix(described, "number "); ok {
+		return literal
+	}
+	return described
+}
+
 // jsonKind says what a field wanted in the words json uses, rather than in a Go
 // type name the client has never heard of.
+//
+// A whole number and a number are told apart, because json is not: 100.5 is a
+// number, and answering an int64 field with "expected: number" tells a client
+// its own value was what it was asked for.
 func jsonKind(t reflect.Type) string {
 	if t == reflect.TypeFor[time.Time]() {
 		return "an RFC 3339 timestamp"
@@ -329,8 +398,9 @@ func jsonKind(t reflect.Type) string {
 	case reflect.Bool:
 		return "boolean"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a whole number"
+	case reflect.Float32, reflect.Float64:
 		return "number"
 	case reflect.Slice, reflect.Array:
 		return "array"

@@ -23,7 +23,7 @@ const (
 var (
 	CodeShape = fmt.Sprintf(
 		"1 to %d characters: a lower-case letter, then lower-case letters, digits, underscores and dots", MaxCode)
-	NameShape = fmt.Sprintf("1 to %d characters, and not only spaces", MaxName)
+	NameShape = fmt.Sprintf("1 to %d characters, %s", MaxName, NotBlank)
 )
 
 // An Account is the chart-of-accounts row a client asks for. The id and the

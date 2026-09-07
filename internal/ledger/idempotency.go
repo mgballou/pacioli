@@ -162,46 +162,6 @@ func replay(ctx context.Context, tx *sql.Tx, c Claim) (Record, error) {
 	return Record{Key: c.Key, Transaction: id.String, Replayed: true}, nil
 }
 
-// EntryOf reads back the entry a transaction holds, legs in posting order.
-func EntryOf(ctx context.Context, tx *sql.Tx, id string) (Entry, error) {
-	var e Entry
-	err := tx.QueryRowContext(ctx,
-		`SELECT currency, description, occurred_at FROM transactions WHERE id = $1::uuid`,
-		id,
-	).Scan(&e.Currency, &e.Description, &e.OccurredAt)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Entry{}, fmt.Errorf("no transaction %q", shown(id))
-		}
-		return Entry{}, fmt.Errorf("read transaction %s: %w", id, err)
-	}
-
-	rows, err := tx.QueryContext(ctx,
-		`SELECT a.code, p.amount_minor
-		   FROM postings p
-		   JOIN accounts a ON a.id = p.account_id
-		  WHERE p.transaction_id = $1::uuid
-		  ORDER BY p.id`,
-		id,
-	)
-	if err != nil {
-		return Entry{}, fmt.Errorf("read the legs of %s: %w", id, err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var leg Leg
-		if err := rows.Scan(&leg.Account, &leg.AmountMinor); err != nil {
-			return Entry{}, fmt.Errorf("scan a leg of %s: %w", id, err)
-		}
-		e.Legs = append(e.Legs, leg)
-	}
-	if err := rows.Err(); err != nil {
-		return Entry{}, fmt.Errorf("read the legs of %s: %w", id, err)
-	}
-	return e, nil
-}
-
 func rollbackToOnce(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT `+onceSavepoint); err != nil {
 		return fmt.Errorf("rollback to savepoint: %w", err)

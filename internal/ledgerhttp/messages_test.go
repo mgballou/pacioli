@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mgballou/pacioli/internal/ledger"
 )
 
 // refusal is every field a refusal can carry. Each test below reads the whole
@@ -123,9 +125,103 @@ func TestTheWrongTypeRefusalSaysWhatTypeItWanted(t *testing.T) {
 	}
 
 	got := read(t, body)
-	if got.Parameter != "postings.amount_minor" || got.Value != "string" || got.Expected != "number" {
+	if got.Parameter != "postings.amount_minor" || got.Value != "string" || got.Expected != ledger.AmountShape {
 		t.Errorf("refusal = %+v, want the field, what it held and what it wanted", got)
 	}
+}
+
+// 100.5 is a number, and "expected: number" told a client its own value was what
+// it was asked for. The rule is minor units as a whole number, and the refusal
+// now says that, what was sent, and the amount that works.
+func TestTheDecimalAmountRefusalNamesMinorUnitsAndNotJustANumber(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, body := post(t, srv.URL+"/v1/transactions", `{
+	  "currency": "GBP", "description": "A pound and a half",
+	  "postings": [{"account": "assets.cash", "amount_minor": 100.5}]}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+	}
+
+	got := read(t, body)
+	if got.Parameter != "postings.amount_minor" {
+		t.Errorf("refusal = %+v, want the field that was sent", got)
+	}
+	if got.Value != "100.5" {
+		t.Errorf("refusal value = %q, want the number that was sent", got.Value)
+	}
+	if got.Expected == "number" {
+		t.Errorf("refusal = %+v, and 100.5 is a number — the rule is minor units", got)
+	}
+	for _, want := range []string{"minor units", "10050"} {
+		if !strings.Contains(got.Expected, want) {
+			t.Errorf("expected = %q, and it does not say %q", got.Expected, want)
+		}
+	}
+}
+
+// The same decoder answers both endpoints, so an integer field on either says
+// what a whole number is rather than "number".
+func TestAWholeNumberIsNotCalledANumber(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, body := post(t, srv.URL+"/v1/transactions", `{
+	  "currency": "GBP", "description": "More than a bigint holds",
+	  "postings": [{"account": "assets.cash", "amount_minor": 9223372036854775808}]}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+	}
+
+	got := read(t, body)
+	if got.Value != "9223372036854775808" {
+		t.Errorf("refusal value = %q, want the number that was sent", got.Value)
+	}
+	if !strings.Contains(got.Expected, "9223372036854775807") {
+		t.Errorf("expected = %q, and it does not say the largest amount a posting holds", got.Expected)
+	}
+}
+
+// btrim() strips spaces and nothing else, so a description of one newline was a
+// description. Both refusals hand back the value and the rule it broke.
+func TestTheBlankRefusalNamesTheFieldAndWhatBlankMeans(t *testing.T) {
+	t.Run("description", func(t *testing.T) {
+		srv := serve(t, seeded)
+
+		res, body := post(t, srv.URL+"/v1/transactions", `{
+		  "currency": "GBP", "description": "\n",
+		  "postings": [
+		    {"account": "assets.cash", "amount_minor": -500},
+		    {"account": "liabilities.customer", "amount_minor": 500}]}`)
+		if res.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("status %d, want 422: %s", res.StatusCode, body)
+		}
+
+		got := read(t, body)
+		if got.Parameter != "description" || got.Value != "\n" {
+			t.Errorf("refusal = %+v, want the description that was sent", got)
+		}
+		if got.Expected != ledger.DescriptionShape {
+			t.Errorf("expected = %q, want %q", got.Expected, ledger.DescriptionShape)
+		}
+	})
+
+	t.Run("name", func(t *testing.T) {
+		srv := serve(t, empty)
+
+		res, body := postPlain(t, srv.URL+"/v1/accounts", `{
+		  "code": "assets.savings", "name": "\t", "kind": "asset", "currency": "GBP"}`)
+		if res.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("status %d, want 422: %s", res.StatusCode, body)
+		}
+
+		got := read(t, body)
+		if got.Parameter != "name" || got.Value != "\t" {
+			t.Errorf("refusal = %+v, want the name that was sent", got)
+		}
+		if got.Expected != ledger.NameShape {
+			t.Errorf("expected = %q, want %q", got.Expected, ledger.NameShape)
+		}
+	})
 }
 
 func TestTheUnreadableBodyRefusalSaysWhereItStopped(t *testing.T) {

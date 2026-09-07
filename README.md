@@ -6,7 +6,7 @@
 
 <p><strong>A double-entry ledger whose rules live in Postgres, not in the service in front of it.</strong></p>
 
-<p>Five HTTP endpoints over a chart of accounts and an append-only book of postings.<br />
+<p>Six HTTP endpoints over a chart of accounts and an append-only book of postings.<br />
 Balances are summed out of those postings on every read, so no stored total can drift.</p>
 
 <p>The balance rule is a deferred constraint trigger, so a migration or a psql session<br />
@@ -64,7 +64,7 @@ bookkeeping in Venice in 1494.
 ## What it does
 
 A chart of accounts, an append-only book of postings, and balances derived from
-those postings on every read. Five HTTP endpoints open accounts, take
+those postings on every read. Six HTTP endpoints open accounts, take
 transactions, and answer questions about the book.
 
 Amounts are signed minor units. A debit is positive and a credit is negative, so
@@ -92,7 +92,9 @@ POST /v1/accounts          open one — code, name, kind, currency; a code alrea
 GET  /v1/accounts/{code}   one account's position
 GET  /v1/trial-balance     debits and credits per currency, and whether they cancel
 POST /v1/transactions      a balanced entry in, the transaction it became out;
-                           Idempotency-Key is required
+                           Idempotency-Key is required, and the answer carries a
+                           Location pointing at the next line
+GET  /v1/transactions/{id} one entry, in the shape the write answered with
 ```
 
 All JSON. Routing is `http.ServeMux` with the method in the pattern, so a `GET`
@@ -154,6 +156,14 @@ those is Postgres refusing. No validation branch in Go decides either status.
 
 An unbalanced entry comes back with the arithmetic of what was sent: how far out,
 over how many legs.
+
+**A refusal names the rule, and never a word that is true of what was sent.**
+JSON has one kind of number, so `"amount_minor": 100.5` answered `expected:
+number` — which it is. An amount is a whole number of minor units, and that is
+what the refusal says now, with the amount that works. The same holds for blank:
+`btrim()` strips spaces and nothing else, so a description of one newline was a
+description. Blank is written once in the schema — nothing but whitespace, or a
+control character anywhere — and every name and description is held to it.
 
 **Every quantity a client controls is bounded, and the refusal says the number.**
 A code is at most 64 characters, a name 100, a description 500, an entry 1,000

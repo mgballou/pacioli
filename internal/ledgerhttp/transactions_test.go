@@ -409,6 +409,142 @@ func xactStatus(t *testing.T, xid string) string {
 	return status
 }
 
+// The write used to hand back an id and nothing would resolve it: a caller
+// stored the id, came back, and found there was no endpoint to come back to.
+// These four say the id is an address.
+
+func TestAPostedTransactionIsServedBackUnderTheIdItWasGiven(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, body := post(t, srv.URL+"/v1/transactions", refund)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201: %s", res.StatusCode, body)
+	}
+	written := entry(t, body)
+	if got, want := res.Header.Get("Location"), "/v1/transactions/"+written.Transaction; got != want {
+		t.Errorf("Location %q, want %q", got, want)
+	}
+
+	res, body = get(t, srv.URL+"/v1/transactions/"+written.Transaction)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", res.StatusCode, body)
+	}
+
+	read := entry(t, body)
+	if read.Transaction != written.Transaction || read.Currency != "GBP" || read.Description != "Refund, in full" {
+		t.Errorf("read back %+v, want the entry that was written", read)
+	}
+	if len(read.Postings) != 2 {
+		t.Fatalf("read back %d postings, want 2: %s", len(read.Postings), body)
+	}
+	// Posting order, which is the order they were written in.
+	if read.Postings[0].Account != cash || read.Postings[0].AmountMinor != -500 {
+		t.Errorf("first leg = %+v, want %s at -500", read.Postings[0], cash)
+	}
+	if read.Postings[1].Account != customer || read.Postings[1].AmountMinor != 500 {
+		t.Errorf("second leg = %+v, want %s at 500", read.Postings[1], customer)
+	}
+}
+
+// Postgres takes a uuid in more spellings than it writes one in, so the answer
+// carries the ledger's id rather than the caller's version of it.
+func TestAnIdInAnotherSpellingReadsBackAsTheLedgerHoldsIt(t *testing.T) {
+	srv := serve(t, seeded)
+
+	_, body := post(t, srv.URL+"/v1/transactions", refund)
+	written := entry(t, body)
+
+	res, body := get(t, srv.URL+"/v1/transactions/"+strings.ToUpper(written.Transaction))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", res.StatusCode, body)
+	}
+	if got := entry(t, body).Transaction; got != written.Transaction {
+		t.Errorf("read back %q, want the id the ledger holds, %q", got, written.Transaction)
+	}
+}
+
+func TestAnUnknownTransactionIs404(t *testing.T) {
+	srv := serve(t, seeded)
+
+	const absent = "00000000-0000-0000-0000-000000000000"
+	res, body := get(t, srv.URL+"/v1/transactions/"+absent)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", res.StatusCode, body)
+	}
+
+	var got struct{ Error, Parameter, Value string }
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", body, err)
+	}
+	if got.Error != "no such transaction" || got.Parameter != "id" || got.Value != absent {
+		t.Errorf("body = %+v, want the refusal and the id that was asked for", got)
+	}
+}
+
+// 400 and not 404: the path segment could not name a transaction, so nothing was
+// asked of the ledger. DESIGN.md 10.
+func TestAnIdThatIsNotAUuidIs400AndSaysTheShapeAnIdTakes(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, body := get(t, srv.URL+"/v1/transactions/not-a-uuid")
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", res.StatusCode, body)
+	}
+
+	var got struct{ Error, Parameter, Value, Expected, See string }
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", body, err)
+	}
+	if got.Value != "not-a-uuid" || got.Expected != ledger.IDShape || got.See == "" {
+		t.Errorf("body = %+v, want the id that was sent and the shape an id takes", got)
+	}
+	if strings.Contains(string(body), "SQLSTATE") || strings.Contains(string(body), "uuid_in") {
+		t.Errorf("body = %s, and it hands the client Postgres's own words", body)
+	}
+}
+
+// A write method on the new path answers 405 and not 404, so a client that
+// mistakes it for the write is told which method it wanted.
+func TestAWriteToOneTransactionIsRefused(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, err := http.Post(srv.URL+"/v1/transactions/"+strings.Repeat("0", 8)+"-0000-0000-0000-000000000000",
+		"application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status %d, want 405", res.StatusCode)
+	}
+	if allow := res.Header.Get("Allow"); !strings.Contains(allow, "GET") {
+		t.Errorf("Allow: %q, want it to name GET", allow)
+	}
+}
+
+// entry reads a transaction body, which is what both the write and the read of
+// one transaction answer with.
+func entry(t *testing.T, body []byte) transactionBody {
+	t.Helper()
+
+	var got transactionBody
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", body, err)
+	}
+	return got
+}
+
+type transactionBody struct {
+	Transaction string `json:"transaction"`
+	Currency    string `json:"currency"`
+	Description string `json:"description"`
+	Postings    []struct {
+		Account     string `json:"account"`
+		AmountMinor int64  `json:"amount_minor"`
+	} `json:"postings"`
+}
+
 // post mints a key prefixed with this package, so its seeds and internal/ledger's cannot wait on each other's open reservation.
 func post(t *testing.T, url, body string) (*http.Response, []byte) {
 	t.Helper()

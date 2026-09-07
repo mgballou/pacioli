@@ -1,6 +1,6 @@
 # Design
 
-Nineteen decisions, each in the same shape: what it does, the obvious
+Twenty-two decisions, each in the same shape: what it does, the obvious
 alternative, and why that alternative is wrong. The code carries almost no
 argument in its comments. This is where the argument lives.
 
@@ -617,3 +617,101 @@ at every isolation level Postgres offers. Nothing else can add legs to that
 entry: the id is generated inside the writing transaction and never leaves it
 before commit, and postings are append-only. The balance rule is safe at any
 level. The retry contract is not.
+
+## 20. A refusal never answers with a word that is true of what was sent
+
+**What it does.** `POST /v1/transactions` with `"amount_minor": 100.5` answers
+`expected: a whole number of minor units, so 100.50 is 10050, from
+-9223372036854775808 to 9223372036854775807`, and hands back `100.5` as the value.
+It used to answer `expected: number`. A field whose type json can describe still
+gets the json word for it, except that an integer field is now told apart from a
+float one: `a whole number`, not `number`.
+
+**The obvious alternative.** Leave it. `encoding/json` reports an
+`UnmarshalTypeError` carrying the Go type, `jsonKind` turns that into the json
+word for it, and the whole thing is nine lines that need no field to know
+anything about itself.
+
+**Why that is wrong.** 100.5 *is* a number. A message that names the rule the
+value already satisfies tells a client its own value was the one that was asked
+for, which is worse than saying nothing: it sends the reader to look at the
+field name, the nesting, the content type — anywhere but the decimal point. The
+rule that was actually broken is this ledger's, not json's, and json cannot
+state it, because json has one kind of number and no idea what a minor unit is.
+
+`shaped` is one map from a json field name to the rule in words, read by both
+endpoints because both decode through `unreadable`. It is the same shape as
+`bounded`, which does the same job for the fields the schema holds to a length.
+One entry today, `amount_minor`, and that is the point: the fix is not a string
+edited in one branch of one handler.
+
+**The honest cost.** The decoder's message is generic by construction, so this
+is a table of exceptions to it and not a wrapper that makes every field describe
+itself. A per-field decoder — one that reads each value as a `json.RawMessage`
+and hands it to a type that owns its own rule — would make the exception table
+unnecessary and would say something true about `occurred_at` as well, which
+today is answered "the request body is not json this endpoint can read" when the
+body is perfectly good json holding a date nobody can parse. That is a bigger
+change than the message it would fix, and it is not made here.
+
+## 21. Blank is a rule in the schema, and it is written once
+
+**What it does.** `is_blank(s)` is true when `s` holds no character that is not
+whitespace. `has_control_character(s)` is true when it holds one anywhere. Both
+are `IMMUTABLE` SQL functions in `0001_ledger.sql`, and the `CHECK` on
+`accounts.name` and on `transactions.description` asks both. `internal/ledger`
+says the same rule in one sentence, `NotBlank`, which `NameShape` and
+`DescriptionShape` are built out of.
+
+**The obvious alternative.** `btrim(x) <> ''`, which is what it was, and which
+reads exactly like a not-blank check.
+
+**Why that is wrong.** `btrim()` with no second argument trims spaces. Not tabs,
+not newlines, not carriage returns. So a description of one newline was a
+description, a name of one tab was a name, and the check that was there to stop
+an empty label stopped only one of the six ways to write one. Every field of a
+person's words had the same hole, because they all had the same check.
+
+Control characters are refused wherever they appear and not only alone, because
+a name is read back into a report and a description into a log line, and neither
+is a place to put an escape sequence. The account code, the currency and the
+idempotency key need none of this: each is a closed set of characters —
+`^[a-z][a-z0-9_.]{0,63}$`, `^[A-Z]{3}$`, `^[[:graph:]]{16,255}$` — and a closed
+set already excludes what these two functions exclude. Postgres anchors `^` and
+`$` to the whole string rather than to a line, so `assets.cash\n` is refused by
+the code shape, and a test says so rather than a comment claiming it. The code is
+the sharp one: it comes back out as a URL path segment.
+
+**Why in the schema rather than in Go.** The same reason the balance rule is
+there. A rule in the handler is a rule a `psql` session walks around, and this
+one guards what a report and a log line will carry.
+
+## 22. A posted transaction has an address
+
+**What it does.** `POST /v1/transactions` answers with a transaction id and a
+`Location` header, and `GET /v1/transactions/{id}` serves the entry that id
+names, in the shape the write answered with. An id that is a uuid the book does
+not hold is 404. An id that is not a uuid is 400, carrying the shape an id takes.
+
+**The obvious alternative.** Stop returning the id, and say that a posted entry
+is addressed by its idempotency key. The key already resolves — a replay under
+it answers with the whole entry — so the retry contract was already the way back
+to a write, and the id was a second one that did not work.
+
+**Why that is wrong.** The key is the client's own string and only the client
+that chose it can use it, so a system where one service posts and another reads
+has nothing to pass between them. The id is the ledger's, it is already in the
+answer, `EntryOf` already reads an entry back by it because that is how a replay
+is answered, and the data is a primary key lookup and a join. The endpoint is
+four lines of handler over a function that was already written and already
+tested.
+
+What was wrong was neither answer on its own. It was offering a handle to
+nothing: a caller stored the id, came back, and found there was no endpoint to
+come back to. `POST /v1/accounts` had carried a `Location` since it was written
+and `POST /v1/transactions` had a comment saying it could not, which is the
+smallest possible version of the same complaint.
+
+**What it does not serve.** `occurred_at` goes in and does not come back, on
+either the write or the read, because the two answer with the same body and
+widening it is an API change this decision did not need to make.

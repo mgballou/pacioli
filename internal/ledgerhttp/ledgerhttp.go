@@ -98,6 +98,7 @@ func Handler(st Store, errorLog *log.Logger) http.Handler {
 	mux.HandleFunc("GET /v1/accounts/{code}", s.balance)
 	mux.HandleFunc("GET /v1/trial-balance", s.trial)
 	mux.HandleFunc("POST /v1/transactions", s.postTransaction)
+	mux.HandleFunc("GET /v1/transactions/{id}", s.transaction)
 	return mux
 }
 
@@ -440,6 +441,17 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named e
 		named.Valid = validKinds(err)
 		named.Error = "no such account kind"
 		s.write(w, r, http.StatusBadRequest, named)
+		return
+	case errors.Is(err, ledger.ErrBadTransactionID):
+		// 400, not 404: the path segment could not name a transaction, so the
+		// ledger was never asked whether one holds it. DESIGN.md 10.
+		named.Error = "that is not a transaction id"
+		named.Expected = ledger.IDShape
+		s.write(w, r, http.StatusBadRequest, named)
+		return
+	case errors.Is(err, ledger.ErrUnknownTransaction):
+		named.Error = "no such transaction"
+		s.write(w, r, http.StatusNotFound, named)
 		return
 	}
 	// RequestURI rather than Path: on a list the query string is the half of

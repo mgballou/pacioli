@@ -1,0 +1,10 @@
+# Without the route, the write hands back an id and nothing will say anything
+# about it: the caller stores a handle to nothing.
+
+title: a posted transaction id has no endpoint that resolves it
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestAPostedTransactionIsServedBackUnderTheIdItWasGiven -v ./internal/ledgerhttp/
+--- before
+	mux.HandleFunc("GET /v1/transactions/{id}", s.transaction)
+--- after
+	// negative control: the id the write returns is a handle to nothing

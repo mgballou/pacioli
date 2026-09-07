@@ -2,6 +2,20 @@
 -- Applied verbatim by internal/schema. There is no migration framework.
 
 
+-- What blank means, written once and asked everywhere a person's words are
+-- held. btrim() strips spaces and nothing else, so `btrim(x) <> ''` took a name
+-- of one newline, one tab or one carriage return as a name.
+CREATE FUNCTION is_blank(s text) RETURNS boolean
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    RETURN s !~ '[^[:space:]]';
+
+-- The other half of the same rule. A control character is not something a
+-- person reads or types, so a value carrying one anywhere is refused whole
+-- rather than trimmed down to what is left.
+CREATE FUNCTION has_control_character(s text) RETURNS boolean
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    RETURN s ~ '[[:cntrl:]]';
+
 CREATE TYPE account_kind AS ENUM (
     'asset',
     'liability',
@@ -13,9 +27,12 @@ CREATE TYPE account_kind AS ENUM (
 CREATE TABLE accounts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     -- Bounded as well as shaped: the code is a URL path segment on the way
-    -- back out, and a 100 kB one was.
+    -- back out, and a 100 kB one was. The shape is a closed set of characters,
+    -- so it already says what is_blank and has_control_character say below:
+    -- ^ and $ anchor the whole string here, and a trailing newline is refused.
     code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]{0,63}$'),
-    name       text NOT NULL CHECK (btrim(name) <> '' AND char_length(name) <= 100),
+    name       text NOT NULL CHECK (NOT is_blank(name) AND NOT has_control_character(name)
+                                    AND char_length(name) <= 100),
     kind       account_kind NOT NULL,
     currency   text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -27,7 +44,8 @@ CREATE TABLE accounts (
 CREATE TABLE transactions (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     currency    text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
-    description text NOT NULL CHECK (btrim(description) <> '' AND char_length(description) <= 500),
+    description text NOT NULL CHECK (NOT is_blank(description) AND NOT has_control_character(description)
+                                     AND char_length(description) <= 500),
     occurred_at timestamptz NOT NULL DEFAULT now(),
     created_at  timestamptz NOT NULL DEFAULT now(),
 

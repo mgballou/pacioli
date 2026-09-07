@@ -4,7 +4,8 @@ title: a transaction description has no length the schema will not hold
 file: internal/schema/0001_ledger.sql
 run: make db-reset && go test -count=1 -run TestAValueLongerThanItsColumnAllowsIsRefused/transactions.description -v ./internal/schema/
 --- before
-    description text NOT NULL CHECK (btrim(description) <> '' AND char_length(description) <= 500),
+    description text NOT NULL CHECK (NOT is_blank(description) AND NOT has_control_character(description)
+                                     AND char_length(description) <= 500),
 --- after
     -- negative control: a description is bounded by the request body alone
-    description text NOT NULL CHECK (btrim(description) <> ''),
+    description text NOT NULL CHECK (NOT is_blank(description) AND NOT has_control_character(description)),

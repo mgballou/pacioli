@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +32,20 @@ var (
 	ErrRejected = errors.New("a rule in the schema refused it")
 )
 
+// The two ways a transaction id can name nothing.
+var (
+	// ErrUnknownTransaction means no transaction holds that id.
+	ErrUnknownTransaction = errors.New("no such transaction")
+
+	// ErrBadTransactionID means the id is not the shape an id takes, so no
+	// transaction can hold it.
+	ErrBadTransactionID = errors.New("that is not a transaction id")
+)
+
+// IDShape puts the transactions primary key, the uuid in internal/schema, into
+// words a client can act on.
+const IDShape = "the uuid POST /v1/transactions answered with"
+
 // A LegError says which leg of an entry the server refused, and what that leg
 // carried.
 type LegError struct {
@@ -51,12 +66,23 @@ func (e *LegError) Error() string {
 // Unwrap keeps errors.Is working through a LegError.
 func (e *LegError) Unwrap() error { return e.Err }
 
+// NotBlank is what the schema means by blank, in the words a refusal uses. It is
+// said once here because is_blank and has_control_character are asked once each
+// in internal/schema, of every field that holds a person's words.
+const NotBlank = "at least one that is not a space, a tab or a line break, and no control characters"
+
+// AmountShape puts postings.amount_minor, the bigint column in internal/schema,
+// into words a client can act on. It is the rule a bare "number" cannot say:
+// json has one kind of number and this ledger takes only whole ones.
+var AmountShape = fmt.Sprintf(
+	"a whole number of minor units, so 100.50 is 10050, from %d to %d", int64(math.MinInt64), int64(math.MaxInt64))
+
 // DescriptionShape puts transactions_description_check, the CHECK in
 // internal/schema, into words a client can act on. MaxDescription is the length
 // those words allow, counted in characters and not bytes.
 const MaxDescription = 500
 
-var DescriptionShape = fmt.Sprintf("1 to %d characters, and not only spaces", MaxDescription)
+var DescriptionShape = fmt.Sprintf("1 to %d characters, %s", MaxDescription, NotBlank)
 
 // A Leg is one side of a transaction: an account code and a signed amount in
 // minor units. Debit is positive, credit negative, and the sides must cancel.
@@ -157,6 +183,59 @@ func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 		return "", fmt.Errorf("re-defer the balance check: %w", err)
 	}
 	return id, nil
+}
+
+// EntryOf reads back the entry a transaction holds, legs in posting order. It
+// is what serves GET /v1/transactions/{id}, and what a replayed write answers
+// from. The id it returns is the one the book holds: Postgres takes a uuid in
+// more spellings than it writes one in, and the answer should carry the ledger's.
+//
+// The id is a client's, so both ways it can name nothing are named: a well
+// formed uuid the book does not hold, and a string that is not a uuid at all.
+// The cast is what tells them apart, and Postgres refuses it with 22P02.
+func EntryOf(ctx context.Context, tx *sql.Tx, id string) (string, Entry, error) {
+	var (
+		held string
+		e    Entry
+	)
+	err := tx.QueryRowContext(ctx,
+		`SELECT id::text, currency, description, occurred_at FROM transactions WHERE id = $1::uuid`,
+		id,
+	).Scan(&held, &e.Currency, &e.Description, &e.OccurredAt)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return "", Entry{}, fmt.Errorf("%w: %q", ErrUnknownTransaction, shown(id))
+		case code(err) == "22P02":
+			return "", Entry{}, fmt.Errorf("%w: %q is not %s: %w", ErrBadTransactionID, shown(id), IDShape, err)
+		}
+		return "", Entry{}, fmt.Errorf("read transaction %s: %w", id, err)
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT a.code, p.amount_minor
+		   FROM postings p
+		   JOIN accounts a ON a.id = p.account_id
+		  WHERE p.transaction_id = $1::uuid
+		  ORDER BY p.id`,
+		held,
+	)
+	if err != nil {
+		return "", Entry{}, fmt.Errorf("read the legs of %s: %w", held, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var leg Leg
+		if err := rows.Scan(&leg.Account, &leg.AmountMinor); err != nil {
+			return "", Entry{}, fmt.Errorf("scan a leg of %s: %w", held, err)
+		}
+		e.Legs = append(e.Legs, leg)
+	}
+	if err := rows.Err(); err != nil {
+		return "", Entry{}, fmt.Errorf("read the legs of %s: %w", held, err)
+	}
+	return held, e, nil
 }
 
 // classify turns the server's refusal into one of the errors above, carrying

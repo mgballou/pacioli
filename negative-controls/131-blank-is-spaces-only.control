@@ -1,0 +1,12 @@
+# btrim() strips spaces and nothing else, so without is_blank a description of
+# one newline is a description and the entry it labels is held.
+
+title: a description of one newline is a description
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestAValueOfNothingButOneControlCharacterIsRefused -v ./internal/schema/
+--- before
+    description text NOT NULL CHECK (NOT is_blank(description) AND NOT has_control_character(description)
+                                     AND char_length(description) <= 500),
+--- after
+    -- negative control: blank means a string of spaces and nothing else
+    description text NOT NULL CHECK (btrim(description) <> '' AND char_length(description) <= 500),

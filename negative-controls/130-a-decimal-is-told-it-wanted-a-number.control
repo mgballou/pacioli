@@ -1,0 +1,14 @@
+# Without the rule, 100.5 is answered `expected: number` — which is what it is.
+# The client is told its own value was the one that was asked for.
+
+title: a decimal amount is refused with the word for what it already is
+file: internal/ledgerhttp/transactions.go
+run: go test -count=1 -run TestTheDecimalAmountRefusalNamesMinorUnitsAndNotJustANumber -v ./internal/ledgerhttp/
+--- before
+	if shape, ok := shaped[leaf(field)]; ok {
+		return shape
+	}
+	return jsonKind(t)
+--- after
+	// negative control: every field takes the decoder's own word for its type
+	return jsonKind(t)

@@ -181,9 +181,12 @@ func TestAnEntryReadsBackAsItWasWritten(t *testing.T) {
 		t.Fatalf("post: %v", err)
 	}
 
-	got, err := ledger.EntryOf(ctx, tx, rec.Transaction)
+	held, got, err := ledger.EntryOf(ctx, tx, rec.Transaction)
 	if err != nil {
 		t.Fatalf("read it back: %v", err)
+	}
+	if held != rec.Transaction {
+		t.Errorf("read back id %q, want %q", held, rec.Transaction)
 	}
 	if got.Currency != three.Currency || got.Description != three.Description {
 		t.Errorf("read back %+v, want the entry that was posted", got)
