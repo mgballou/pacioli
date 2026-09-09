@@ -65,7 +65,7 @@ const usage = `pacioli — a double-entry ledger
 
   pacioli            print the version this binary was built from
   pacioli version    the same, said out loud
-  pacioli serve      serve the ledger's read surface over HTTP
+  pacioli serve      serve the ledger over HTTP
   pacioli help       this
 
   pacioli serve -h   the flags serve takes
