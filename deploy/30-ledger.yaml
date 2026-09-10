@@ -1,0 +1,89 @@
+# The ledger. Two replicas, because one replica cannot show a rolling update.
+#
+# There is no `depends_on` here and no equivalent. `pacioli serve` gives the
+# first connection ten seconds (serve.go:41) and then exits non-zero, so a pod
+# that starts before Postgres is ready dies and is restarted with backoff. That
+# is the intended behavior and not a fault to design around: the restart is the
+# dependency ordering, and `kubectl get pods -w` shows it happening.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledger
+  namespace: pacioli
+spec:
+  selector:
+    app: ledger
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger
+  namespace: pacioli
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: ledger
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: ledger
+          image: pacioli-ledger:k8s
+          # The image is built into the same daemon the cluster runs on, so
+          # there is nothing to pull and no registry. Never means a typo in the
+          # tag fails loudly instead of reaching out to Docker Hub.
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: ledger-config
+            - secretRef:
+                name: ledger-secret
+          # Two probes, and the split is the point.
+          #
+          # Readiness asks the database a real question. `GET /v1/trial-balance`
+          # reads every account, so it fails when Postgres is gone and the
+          # Service takes this pod out of rotation. pacioli has no /healthz, and
+          # that is the first thing Kubernetes says it is missing: an endpoint
+          # that is cheap and still touches the pool.
+          readinessProbe:
+            httpGet:
+              path: /v1/trial-balance
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Liveness does NOT ask the database. A liveness probe that fails on a
+          # database blip kills every pod at once and turns a slow database into
+          # an outage. It asks only whether the process still holds its socket.
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          # drainGrace is 15s (serve.go:44). Give the pod more than that, or
+          # Kubernetes kills it in the middle of its own clean shutdown.
+      terminationGracePeriodSeconds: 30

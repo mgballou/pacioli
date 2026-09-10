@@ -1,0 +1,74 @@
+# .github/workflows/k8s.yml
+#
+# Free on a public repository: GitHub Actions charges nothing for standard
+# runners there. This job builds the image, brings up a real Kubernetes cluster,
+# applies the manifests, and posts a balanced entry through the Service. It
+# fails if any of that stops being true.
+#
+# The point is not the cluster. The point is the badge: a stranger reading the
+# repo can see that the manifests in it were applied to a real cluster on the
+# last commit, rather than written and never run.
+name: kubernetes
+
+on: [push, pull_request]
+
+jobs:
+  cluster:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the image
+        run: docker build -t pacioli-ledger:ci .
+
+      - name: Start a cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: pacioli
+
+      - name: Load the image into the cluster
+        run: kind load docker-image pacioli-ledger:ci --name pacioli
+
+      - name: Apply the manifests
+        run: |
+          sed -i 's|pacioli-ledger:k8s|pacioli-ledger:ci|' deploy/30-ledger.yaml
+          kubectl apply -f deploy/
+
+      - name: Wait for the rollout
+        run: |
+          kubectl rollout status statefulset/postgres -n pacioli --timeout=180s
+          kubectl rollout status deployment/ledger  -n pacioli --timeout=180s
+
+      - name: Post a balanced entry through the Service
+        run: |
+          kubectl port-forward -n pacioli service/ledger 8080:8080 &
+          sleep 5
+          curl -sSf -X POST localhost:8080/v1/accounts \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"assets.cash","name":"Cash","kind":"asset","currency":"GBP"}'
+          curl -sSf -X POST localhost:8080/v1/accounts \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"revenue.fees","name":"Fees","kind":"revenue","currency":"GBP"}'
+          curl -sSf -X POST localhost:8080/v1/transactions \
+            -H 'Content-Type: application/json' \
+            -H "Idempotency-Key: ci-${GITHUB_SHA}" \
+            -d '{"currency":"GBP","description":"CI",
+                 "postings":[{"account":"assets.cash","amount_minor":1000},
+                             {"account":"revenue.fees","amount_minor":-1000}]}'
+          curl -sSf localhost:8080/v1/trial-balance | tee /tmp/trial.json
+          grep -q '"balanced": true' /tmp/trial.json
+
+      - name: Prove the state survives a pod restart
+        run: |
+          kubectl delete pod postgres-0 -n pacioli
+          kubectl rollout status statefulset/postgres -n pacioli --timeout=180s
+          kubectl port-forward -n pacioli service/ledger 8081:8080 &
+          sleep 5
+          curl -sSf localhost:8081/v1/trial-balance | grep -q '"postings": 2'
+
+      - name: What failed, if it did
+        if: failure()
+        run: |
+          kubectl get pods -n pacioli -o wide
+          kubectl describe pods -n pacioli
+          kubectl logs -n pacioli -l app=ledger --tail=100 --prefix
