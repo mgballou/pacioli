@@ -1,0 +1,35 @@
+# The two things compose bakes into the file and Kubernetes does not.
+#
+# ConfigMap is the part a reader may see. Secret is the part they may not. The
+# image holds neither: `docker history pacioli-ledger:k8s` shows LEDGER_ADDR
+# from the Dockerfile and no DSN at all, and the DSN is the one with the
+# password in it.
+#
+# A Secret is base64, not encryption. Anyone with `get secret` in this namespace
+# reads it. What it buys here is that the credential is not in the image, not in
+# the manifest a reader clones, and can be rotated without a rebuild.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ledger-config
+  namespace: pacioli
+data:
+  # 0.0.0.0 for the same reason the Dockerfile says: a Service forwards to the
+  # pod's interface and cannot reach the container's own loopback.
+  LEDGER_ADDR: "0.0.0.0:8080"
+  # Two seconds to wait for one of the pool's sixteen connections. DESIGN.md 24
+  # argues the number; this is where a deployer moves it without a rebuild.
+  LEDGER_ACQUIRE_TIMEOUT: "2s"
+  LEDGER_REQUEST_TIMEOUT: "15s"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ledger-secret
+  namespace: pacioli
+type: Opaque
+stringData:
+  # One string, because that is what `pacioli serve` reads. Splitting it into
+  # host, user and password would need a change to the program.
+  LEDGER_DSN: "postgres://pacioli:pacioli@postgres:5432/pacioli?sslmode=disable"
+  POSTGRES_PASSWORD: "pacioli"
