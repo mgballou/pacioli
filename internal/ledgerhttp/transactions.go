@@ -19,16 +19,24 @@ import (
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
-// maxRequestBody bounds what will be read from a client body.
-const maxRequestBody = 1 << 20
+// maxTransactionBody is the most of a body this endpoint reads.
+//
+// It is what maxPostings already implies. The largest entry this endpoint
+// accepts is a thousand legs at the schema's own ceilings — a 64-character code
+// and a full-width amount on every leg, a 500-character description — and that
+// entry is 117,091 bytes, or 163,121 indented by four. A quarter of a megabyte
+// is half again on top of the larger of those. DESIGN.md 25.
+const maxTransactionBody = 256 << 10
 
 // maxPostings bounds the legs one entry may carry.
 //
-// The 1 MB body is a backstop, not a bound: it let one entry carry 20,900 legs
-// and take 21 seconds. A thousand is past anything double entry produces — most
-// entries have two, a consolidated payroll or settlement journal has hundreds —
-// and it holds one request to a thousand round trips and a response of tens of
-// kilobytes rather than a megabyte.
+// The body was all that bounded them, and at 1 MB it let one entry carry 20,900
+// legs and take 21 seconds. A thousand is past anything double entry produces —
+// most entries have two, a consolidated payroll or settlement journal has
+// hundreds — and it holds one request to a thousand round trips and a response
+// of tens of kilobytes rather than a megabyte. maxTransactionBody is read off
+// this number now, and the decoder reads no further into an entry than it
+// allows. DESIGN.md 16 and 25.
 const maxPostings = 1000
 
 // The headers the idempotency contract is carried on.
@@ -120,7 +128,7 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req transactionRequest
-	if !s.decode(w, r, &req) {
+	if !s.decode(w, r, &req, maxTransactionBody) {
 		return
 	}
 

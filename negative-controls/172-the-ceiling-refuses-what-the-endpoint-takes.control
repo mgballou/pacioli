@@ -1,0 +1,11 @@
+# A body ceiling is only right if it admits the largest body the endpoint
+# accepts: a thousand legs at 64 characters a code, with a 500-character
+# description, is 117,091 bytes.
+
+title: the body ceiling is under the largest entry the endpoint takes
+file: internal/ledgerhttp/transactions.go
+run: go test -count=1 -run TestTheLargestEntryTheEndpointTakesIsInsideTheBodyCeiling -v ./internal/ledgerhttp/
+--- before
+const maxTransactionBody = 256 << 10
+--- after
+const maxTransactionBody = 64 << 10

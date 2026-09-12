@@ -1,0 +1,14 @@
+# The endpoint takes a thousand legs and the decoder read as many as the body
+# carried, so a body of 5,500 was walked in full to be told the count: 373 MB
+# across four hundred requests, against 188 MB once the walk stops at the bound.
+
+title: the decoder reads past the legs the endpoint takes
+file: internal/ledgerhttp/decode.go
+run: go test -count=1 -run TestTheLegsPastTheBoundAreNotRead -v ./internal/ledgerhttp/
+--- before
+	read := len(items)
+	if most, ok := counted[leaf(path)]; ok && read > most {
+		read = most
+	}
+--- after
+	read := len(items)

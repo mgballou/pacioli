@@ -8,7 +8,7 @@ Read these first:
 
 - `CONTRIBUTING.md` — the Makefile targets, the conventions, and the traps that
   bite a test run. It is current.
-- `docs/DESIGN.md` — twenty-four decisions, each with the alternative it beat. A
+- `docs/DESIGN.md` — twenty-five decisions, each with the alternative it beat. A
   question shaped "why does this not…" is almost always answered there.
 
 `make all` (build, vet, staticcheck, race tests) has to pass before a change is
@@ -45,7 +45,7 @@ editing `README.md`, check GitHub still renders the block:
 **The demo targets seed over HTTP.** All four — `make demo`, `make demo-post`,
 `make demo-idempotency`, `make demo-serve` — open their chart through
 `POST /v1/accounts` and post through `POST /v1/transactions`. Nothing under
-`tools/` touches psql. All four ran green from a cold stack on 7 September 2026.
+`tools/` touches psql. All four ran green from a cold stack on 12 September 2026.
 
 **A demo entry meant to be refused needs its own idempotency key.** Send the
 refusal under a key an accepted entry already holds and the answer is 409, the

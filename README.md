@@ -170,9 +170,12 @@ control character anywhere — and every name and description is held to it.
 A code is at most 64 characters, a name 100, a description 500, an entry 1,000
 legs. A value past one of those answers 422 with the rule in words, a trimmed
 value, and `characters`: how long the value actually was, which a trimmed value
-cannot say. The 1 MB request body is a backstop behind all of them — it is what
-let one entry carry 20,900 legs, 21 seconds inside a single request, and four
-accounts answer a report with a megabyte.
+cannot say. The body carrying them is bounded too, and by what each endpoint
+takes: 4 kB to open an account, 256 kB to post an entry, and a body past that
+answers 413 while it is still arriving. One backstop of a megabyte for both is
+what let one entry carry 20,900 legs, 21 seconds inside a single request, four
+accounts answer a report with a megabyte, and four hundred bodies of names no
+endpoint defines hold ten gigabytes at once.
 
 ## The schema
 
@@ -375,7 +378,7 @@ The test database is Postgres 18 on `127.0.0.1:55432`, described in
 
 ## Proving the tests can fail
 
-A test that cannot fail is decoration. `negative-controls/` holds sixty-five declared
+A test that cannot fail is decoration. `negative-controls/` holds sixty-nine declared
 mutations — remove the unique index on idempotency keys, drop the balance
 trigger, stop the server draining, set every timeout back to zero — each naming
 the test that should catch it.
