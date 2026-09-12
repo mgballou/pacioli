@@ -11,9 +11,14 @@ import (
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
-// maxPostings is the bound internal/ledgerhttp holds an entry to. It is not
-// exported, so this is the copy a client would read off the refusal.
-const maxPostings = 1000
+// The bounds internal/ledgerhttp holds a write to: the legs of an entry, and
+// the most of a body each endpoint reads. None is exported, so these are the
+// copies a client would read off the refusals.
+const (
+	maxPostings        = 1000
+	maxAccountBody     = 4 << 10
+	maxTransactionBody = 256 << 10
+)
 
 // entryOf builds an entry of n legs that cancel in pairs, all on two accounts.
 func entryOf(n int) string {
@@ -136,19 +141,39 @@ func TestAnOverLongAccountNameIsRefusedWithTheRuleAndTheLength(t *testing.T) {
 }
 
 // The code is the sharp one: it comes back out as a URL path segment, and a
-// 100 kB one did. The refusal names the rule and the length, and carries
-// neither the code nor a URL built from it.
+// 100 kB one did. Two ceilings stop it now, and neither refusal carries the
+// code or a URL built from it.
 func TestAnOverLongAccountCodeIsRefusedWithTheRuleAndTheLength(t *testing.T) {
 	srv := serve(t, empty)
 
-	long := "a" + strings.Repeat("b", 100_000)
-	res, body := postPlain(t, srv.URL+"/v1/accounts", fmt.Sprintf(
-		`{"code": %q, "name": "A code of a hundred kilobytes", "kind": "asset", "currency": "GBP"}`, long))
+	// A code the body still carries, so the ledger is the one that refuses it.
+	t.Run("three thousand characters", func(t *testing.T) {
+		long := "a" + strings.Repeat("b", 3_000)
+		res, body := postPlain(t, srv.URL+"/v1/accounts", fmt.Sprintf(
+			`{"code": %q, "name": "A code of three kilobytes", "kind": "asset", "currency": "GBP"}`, long))
 
-	assertBounded(t, res, body, "code", ledger.CodeShape, len(long))
-	if len(body) > 4096 {
-		t.Errorf("the refusal is %d bytes, and it was given a %d-character code", len(body), len(long))
-	}
+		assertBounded(t, res, body, "code", ledger.CodeShape, len(long))
+		if len(body) > 4096 {
+			t.Errorf("the refusal is %d bytes, and it was given a %d-character code", len(body), len(long))
+		}
+	})
+
+	// The hundred kilobytes it was, which this endpoint no longer reads.
+	t.Run("a hundred kilobytes", func(t *testing.T) {
+		long := "a" + strings.Repeat("b", 100_000)
+		res, body := postPlain(t, srv.URL+"/v1/accounts", fmt.Sprintf(
+			`{"code": %q, "name": "A code of a hundred kilobytes", "kind": "asset", "currency": "GBP"}`, long))
+
+		if res.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status %d, want 413: %s", res.StatusCode, body)
+		}
+		if len(body) > 4096 {
+			t.Errorf("the refusal is %d bytes, and it was given a %d-character code", len(body), len(long))
+		}
+		if strings.Contains(string(body), long[:64]) {
+			t.Error("the refusal carries the code it would not read")
+		}
+	})
 }
 
 // And the bound itself: one character past it is refused like any other.
@@ -164,22 +189,36 @@ func TestACodeOneCharacterPastTheBoundIsRefused(t *testing.T) {
 
 // The reproduction: four accounts answered GET /v1/accounts with 1,000,655
 // bytes, because nothing bounded a name and the report reads them all back.
-// None of the four opens now, and the report cannot be made large.
+// None of the four opens now, at either of the two lengths it takes to be
+// refused: a body carrying a name of a quarter of a megabyte is past what this
+// endpoint reads, and a name the body does carry is refused by MaxName.
 func TestFourAccountsCannotMakeAMegabyteOfAReport(t *testing.T) {
 	srv := serve(t, empty)
 
-	const each = 250_000
-	for i, code := range []string{"assets.one", "assets.two", "assets.three", "assets.four"} {
-		res, body := postPlain(t, srv.URL+"/v1/accounts", fmt.Sprintf(
-			`{"code": %q, "name": %q, "kind": "asset", "currency": "GBP"}`,
-			code, strings.Repeat("n", each)))
-		if res.StatusCode != http.StatusUnprocessableEntity {
-			t.Fatalf("account %d: status %d, want 422: %d bytes", i+1, res.StatusCode, len(body))
-		}
-		if len(body) > 4096 {
-			t.Errorf("account %d: the refusal is %d bytes, and it was given a %d-character name",
-				i+1, len(body), each)
-		}
+	codes := []string{"assets.one", "assets.two", "assets.three", "assets.four"}
+	for _, round := range []struct {
+		name   string
+		each   int
+		status int
+	}{
+		{"a quarter of a megabyte of name each", 250_000, http.StatusRequestEntityTooLarge},
+		{"three kilobytes of name each", 3_000, http.StatusUnprocessableEntity},
+	} {
+		t.Run(round.name, func(t *testing.T) {
+			for i, code := range codes {
+				res, body := postPlain(t, srv.URL+"/v1/accounts", fmt.Sprintf(
+					`{"code": %q, "name": %q, "kind": "asset", "currency": "GBP"}`,
+					code, strings.Repeat("n", round.each)))
+				if res.StatusCode != round.status {
+					t.Fatalf("account %d: status %d, want %d: %d bytes",
+						i+1, res.StatusCode, round.status, len(body))
+				}
+				if len(body) > 4096 {
+					t.Errorf("account %d: the refusal is %d bytes, and it was given a %d-character name",
+						i+1, len(body), round.each)
+				}
+			}
+		})
 	}
 
 	res, body := get(t, srv.URL+"/v1/accounts")
@@ -216,4 +255,157 @@ func assertBounded(t *testing.T, res *http.Response, body []byte, field, shape s
 		t.Errorf("body = %+v, want where the rule is written down", got)
 	}
 	return got
+}
+
+// The body a write carries is bounded too, and the number is the endpoint's
+// own: a request the endpoint cannot answer for is refused before it is held.
+// One body of a megabyte, of names no endpoint defines, was read whole, walked
+// whole and answered with a list as long as it. DESIGN.md 25.
+func TestEachEndpointReadsOnlyTheBodyItsOwnBoundsAllow(t *testing.T) {
+	for _, e := range []struct {
+		name    string
+		path    string
+		ceiling int
+		body    func(int) string
+		send    func(*testing.T, string, string) (*http.Response, []byte)
+	}{
+		{"an account", "/v1/accounts", maxAccountBody, accountBodyOf, postPlain},
+		{"a transaction", "/v1/transactions", maxTransactionBody, transactionBodyOf, post},
+	} {
+		t.Run(e.name, func(t *testing.T) {
+			srv := serve(t, seeded)
+
+			// At the ceiling the body is read, so the ledger is what refuses it.
+			res, body := e.send(t, srv.URL+e.path, e.body(e.ceiling))
+			if res.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("a body of exactly %d bytes gave %d, want the 422 of a body that was read: %s",
+					e.ceiling, res.StatusCode, body)
+			}
+
+			// One byte past it, and nothing reads it.
+			res, body = e.send(t, srv.URL+e.path, e.body(e.ceiling+1))
+			if res.StatusCode != http.StatusRequestEntityTooLarge {
+				t.Fatalf("a body of %d bytes gave %d, want 413: %s", e.ceiling+1, res.StatusCode, body)
+			}
+
+			var got refusal
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatalf("unmarshal %q: %v", body, err)
+			}
+			if !strings.Contains(got.Expected, strconv.Itoa(e.ceiling)) {
+				t.Errorf("expected %q, want it to name the ceiling of %d", got.Expected, e.ceiling)
+			}
+		})
+	}
+}
+
+// The two ceilings are different numbers, because the two endpoints take
+// different bodies. A body the transaction endpoint reads without comment is
+// past what an account is.
+func TestTheBodyCeilingIsTheEndpointsOwn(t *testing.T) {
+	srv := serve(t, seeded)
+
+	body := accountBodyOf(maxAccountBody + 1)
+	res, got := postPlain(t, srv.URL+"/v1/accounts", body)
+	if res.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("%d bytes to /v1/accounts gave %d, want 413: %s", len(body), res.StatusCode, got)
+	}
+
+	// The same length of body, at the endpoint whose own bound is larger.
+	res, got = post(t, srv.URL+"/v1/transactions", transactionBodyOf(maxAccountBody+1))
+	if res.StatusCode == http.StatusRequestEntityTooLarge {
+		t.Fatalf("%d bytes to /v1/transactions gave 413, so both endpoints hold one ceiling: %s", len(body), got)
+	}
+}
+
+// And the ceiling admits the largest entry the endpoint takes, which is what a
+// body limit chosen without one had no way to promise.
+func TestTheLargestEntryTheEndpointTakesIsInsideTheBodyCeiling(t *testing.T) {
+	srv := serve(t, empty)
+
+	// Two codes at the schema's own ceiling, so every leg is as long as a leg
+	// can be.
+	debit := "a" + strings.Repeat("d", ledger.MaxCode-1)
+	credit := "b" + strings.Repeat("c", ledger.MaxCode-1)
+	for _, code := range []string{debit, credit} {
+		res, body := postPlain(t, srv.URL+"/v1/accounts", fmt.Sprintf(
+			`{"code": %q, "name": "At the ceiling", "kind": "asset", "currency": "GBP"}`, code))
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("open %s: status %d: %s", code, res.StatusCode, body)
+		}
+	}
+
+	// maxPostings legs, a full-width amount on every one, and a description at
+	// its own bound: the largest entry this endpoint accepts.
+	legs := make([]string, 0, maxPostings)
+	for i := range maxPostings {
+		account, amount := debit, "9223372036854775807"
+		if i%2 == 1 {
+			account, amount = credit, "-9223372036854775807"
+		}
+		legs = append(legs, fmt.Sprintf(`{"account": %q, "amount_minor": %s}`, account, amount))
+	}
+	entry := fmt.Sprintf(`{"currency": "GBP", "description": %q, "postings": [%s]}`,
+		strings.Repeat("d", ledger.MaxDescription), strings.Join(legs, ","))
+
+	if len(entry) > maxTransactionBody {
+		t.Fatalf("the largest entry this endpoint takes is %d bytes and the ceiling is %d",
+			len(entry), maxTransactionBody)
+	}
+
+	res, body := post(t, srv.URL+"/v1/transactions", entry)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201 — the ceiling refuses an entry the endpoint accepts: %s",
+			res.StatusCode, body)
+	}
+}
+
+// A body carrying more legs than the endpoint takes is refused for the count,
+// and the legs past the count are not read. Every one of them was: a 5,500-leg
+// body was walked in full to be told it may carry a thousand. DESIGN.md 25.
+func TestTheLegsPastTheBoundAreNotRead(t *testing.T) {
+	srv := serve(t, seeded)
+
+	legs := make([]string, 0, maxPostings+1)
+	for i := range maxPostings {
+		account, amount := cash, "100"
+		if i%2 == 1 {
+			account, amount = customer, "-100"
+		}
+		legs = append(legs, fmt.Sprintf(`{"account": %q, "amount_minor": %s}`, account, amount))
+	}
+	// One leg past the bound, and nothing about it can be read. Reaching it is
+	// the failure.
+	legs = append(legs, `{"account": 7, "amount_minor": "not a number", "elsewhere": true}`)
+
+	res, body := post(t, srv.URL+"/v1/transactions", fmt.Sprintf(
+		`{"currency": "GBP", "description": "One leg past the bound, and unreadable", "postings": [%s]}`,
+		strings.Join(legs, ",")))
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want the 422 of a count — the leg past the bound was read: %s",
+			res.StatusCode, body)
+	}
+
+	var got refusal
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", body, err)
+	}
+	if got.Parameter != "postings" || got.Value != strconv.Itoa(maxPostings+1) {
+		t.Errorf("body = %+v, want the count of %d refused against the bound", got, maxPostings+1)
+	}
+}
+
+// accountBodyOf is a json object of exactly n bytes for POST /v1/accounts, the
+// padding going in the one field with room for it.
+func accountBodyOf(n int) string {
+	const shape = `{"code": "assets.pad", "name": %q, "kind": "asset", "currency": "GBP"}`
+	return fmt.Sprintf(shape, strings.Repeat("n", n-len(fmt.Sprintf(shape, ""))))
+}
+
+// transactionBodyOf is the same for POST /v1/transactions.
+func transactionBodyOf(n int) string {
+	shape := `{"currency": "GBP", "description": %q, "postings": [` +
+		fmt.Sprintf(`{"account": %q, "amount_minor": 100}, {"account": %q, "amount_minor": -100}`, cash, customer) +
+		`]}`
+	return fmt.Sprintf(shape, strings.Repeat("d", n-len(fmt.Sprintf(shape, ""))))
 }

@@ -1,6 +1,6 @@
 # Design
 
-Twenty-four decisions, each in the same shape: what it does, the obvious
+Twenty-five decisions, each in the same shape: what it does, the obvious
 alternative, and why that alternative is wrong. The code carries almost no
 argument in its comments. This is where the argument lives.
 
@@ -422,6 +422,10 @@ The numbers themselves:
   of kilobytes. The 1 MB body was allowing 20,900 of the legs this repo's own
   demo writes, and one such request took 21.6 seconds end to end.
 
+Bounding the fields is what lets a body be bounded afterwards, and decision 25
+does that: a ceiling read off the fields an endpoint takes is a different thing
+from a backstop chosen instead of them.
+
 The lengths are written twice — once in the `CHECK`, once in `internal/ledger` so
 a refusal can say them — and a test reads `pg_get_constraintdef` back and fails
 if the two ever disagree.
@@ -518,7 +522,7 @@ The numbers, and why each is the number it is:
 | deadline | value | what it bounds |
 |---|---|---|
 | `-read-header-timeout` | 10s | a connection that opens and sends no headers. The headers here are a few hundred bytes. |
-| `-read-timeout` | 30s | the whole request off the wire. The body is capped at 1 MB, so this is 1 MB at about 280 kbit/s. |
+| `-read-timeout` | 30s | the whole request off the wire. The largest body an endpoint reads is 256 kB, decision 25, so this is 256 kB at about 70 kbit/s. |
 | `-request-timeout` | 15s | the handler, and the database work behind it. |
 | `-write-timeout` | 45s | the socket, once the two above have already been missed. It is read plus request, so it can only fire as a backstop. |
 | `-idle-timeout` | 120s | a kept-alive connection carrying nothing. |
@@ -1016,3 +1020,118 @@ waits, which is what it did and what a test that hands the handler its own
 transaction still wants. The flag is where a deployer meets the number, and
 there zero is refused with the other five, for decision 18's reason: it would
 put the server back where it started and look like configuration while doing it.
+
+---
+
+## 25. Each endpoint reads the body its own bounds allow
+
+**What it does.** `POST /v1/accounts` reads at most 4 kB of a body and
+`POST /v1/transactions` at most 256 kB. Each number comes from the fields that
+endpoint already bounds. A body past the ceiling is refused 413 while it is
+still arriving, so the server never holds it. Inside the ceiling the decoder
+reads no further into an array than the endpoint takes: an entry carrying more
+than `maxPostings` legs is refused for the count, and the legs past the count
+are not read.
+
+    HTTP/1.1 413 Request Entity Too Large
+    Content-Type: application/json
+
+    {
+      "error": "the request body is larger than this endpoint accepts",
+      "expected": "at most 4096 bytes",
+      "see": "github.com/mgballou/pacioli — README.md and docs/DESIGN.md, or run `pacioli --help`"
+    }
+
+**The obvious alternative.** Decision 16 bounds every field a client sends, and
+it refused to get there by lowering the body limit: a body limit says nothing
+about any one field, so every field inherits the whole of it. The 1 MB backstop
+stayed behind all of them. A body carrying more than the endpoint takes meets
+one of decision 16's bounds the moment it is read and is refused without
+touching the database. Leave the backstop alone.
+
+**Why that is wrong.** The refusal is not free, and it was the most expensive
+thing the server did. Every bound in decision 16 is asked after the body has
+been read whole: the decoder holds the bytes, copies them into a map, splits
+the array they carry into one raw message per element, and reads every element.
+Decision 20 bought that walk, so a refusal can name the field a body got wrong
+and find every field it got wrong in one pass. Nothing measured what the walk
+costs. It costs 33 times the body — 1,045,052 bytes in, 33,959,221 bytes
+allocated — and 155 times for a body of names no endpoint defines, because the
+closed set of valid names is built again for every name and every one of them
+goes into the answer. Handing the same body to `encoding/json` costs 2.5 times.
+
+Nothing bounded how many requests do that at once. Decision 24's ceiling does
+not reach them: a request refused for its body never asks for a connection, so
+the queue it bounds is not the queue holding the memory. Four hundred concurrent
+requests, and the peak resident set of the server process:
+
+    before   1,000-leg entries, 47 kB                          130 MB   64 taken, 336 refused at 2.13s
+             the largest entry accepted, 1,000 legs, 100 kB    212 MB   64 taken, 336 refused at 2.18s
+             5,500 legs in a 256 kB body                       373 MB   422 at 554ms
+             22,000 legs in a 1 MB body                      1,476 MB   422 at 2.00s
+             a 1 MB body of names no endpoint defines       10,062 MB   400 at 9.99s, 173 of the 400 ran out of budget
+
+    after    1,000-leg entries, 47 kB                          127 MB   64 taken, 336 refused at 2.13s
+             the largest entry accepted, 1,000 legs, 100 kB    222 MB   64 taken, 336 refused at 2.15s
+             5,500 legs in a 256 kB body                       188 MB   422 at 259ms
+             22,000 legs in a 1 MB body                         91 MB   413 at 220ms
+             a 1 MB body of names no endpoint defines           27 MB   413 at 120ms
+
+The first two rows are the load decision 24 was measured on and the heaviest
+work this API accepts, and neither moved. The other three are requests the
+endpoint refuses, and they were costing between twice and fifty times what it
+costs to serve. The last of them is the shape of the whole argument: one
+megabyte of `{"a":1,"b":1,…}`, a body `POST /v1/accounts` has no use for a
+thousandth of, read whole, walked whole, and answered with a list as long as it.
+Four hundred of those put ten gigabytes in a process that idles at 16 MB, and
+the last of them was answered at 21.2 seconds.
+
+So the line the numbers draw is this: **nothing a client can send now costs more
+than the largest entry the endpoint accepts.** That is 222 MB at four hundred at
+once, and it is the number a deployer sizes for.
+
+**Where the two numbers came from.** Each is what the endpoint's own bounds
+already imply, with room on top.
+
+- **4 kB for an account.** An account is four fields the schema bounds: a
+  64-character code, a 100-character name, a kind out of five, a three-letter
+  currency. All four at their ceilings, in the widest runes the `CHECK`s allow,
+  is 521 bytes — 546 indented by four, and 1,641 with every character sent as
+  `\uXXXX`. Four kilobytes is past all of them.
+- **256 kB for a transaction.** The largest entry this endpoint accepts is
+  `maxPostings` legs at the schema's own ceilings: a 64-character code and a
+  full-width amount on every leg, and a 500-character description. That entry is
+  117,091 bytes, or 163,121 indented by four. A quarter of a megabyte is half
+  again on top of the larger. A test builds that entry and posts it, so the
+  ceiling cannot drift under what decision 16 admits.
+
+**What it gives up, and it is real.** A client that spells every character of
+every string as `\uXXXX` can make the largest legitimate entry about 441 kB, and
+this endpoint now refuses it at 256 kB with the ceiling in bytes. No client
+writes JSON that way, and one that does can send the same entry unescaped. The
+alternative is a ceiling twice as high for a body nobody sends, which is what a
+backstop is and what this decision is about.
+
+**Why the decoder stops at the count.** A body of 5,500 legs was read in full to
+be told the endpoint takes a thousand. It is refused for the count either way,
+and the slice keeps the whole length, so the refusal still names 5,500; what the
+walk past the bound decides is nothing. One thing changes with it: a body that
+carries too many legs *and* cannot read one of the legs past the bound is now
+refused for the count rather than for the leg. The count is the first thing
+wrong with it, so that is the right refusal, and a client that mends the count
+sees the leg on the next pass.
+
+**Why 413 and not 422.** Decision 10 puts a request that could not be read on
+one side and a ledger that refused it on the other. A body larger than the
+endpoint reads was not read, so it is the first side, and 413 is the status HTTP
+has for exactly it. It is also what the 1 MB backstop already answered, so the
+refusal a client handles has not changed shape — only the number in it.
+
+**What this still does not bound.** How many requests are in flight. The
+listener accepts what the machine will accept, and the 222 MB above is four
+hundred at once and scales with the count. A deployer sizing a process
+multiplies the largest body the endpoint takes by the requests it will admit at
+once; with these two ceilings that product is a number worth computing, which is
+what it was not when a request could hold a megabyte. The remaining cost is the
+walk itself — 33 times the body, against 2.5 for `encoding/json` — and it is
+paid on every request, refused or taken.
