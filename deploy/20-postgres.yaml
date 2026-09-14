@@ -1,0 +1,79 @@
+# A StatefulSet and not a Deployment, for one reason: the PersistentVolumeClaim
+# is written by the controller, one per pod, and it outlives the pod. A
+# Deployment with a volumeClaimTemplate is not a thing.
+#
+# The headless Service is what gives the pod a stable DNS name. `postgres` in
+# the DSN resolves here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: pacioli
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: pacioli
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: pacioli
+            - name: POSTGRES_DB
+              value: pacioli
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ledger-secret
+                  key: POSTGRES_PASSWORD
+          # The same check compose runs, in the shape Kubernetes takes. The
+          # difference that matters: compose can hold the ledger back until this
+          # passes. Kubernetes cannot, and does not try.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "pacioli", "-d", "pacioli"]
+            initialDelaySeconds: 3
+            periodSeconds: 2
+            timeoutSeconds: 3
+          volumeMounts:
+            # /var/lib/postgresql and not /var/lib/postgresql/data: the 18
+            # images moved PGDATA down a level and declare the volume here.
+            # compose.yaml mounts the same path.
+            - name: pgdata
+              mountPath: /var/lib/postgresql
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
