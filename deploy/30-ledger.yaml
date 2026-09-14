@@ -1,8 +1,11 @@
 # The ledger. Two replicas, because one replica cannot show a rolling update.
 #
-# There is no `depends_on` here and no equivalent. `pacioli serve` gives the
-# first connection ten seconds (serve.go:41) and then exits non-zero, so a pod
-# that starts before Postgres is ready dies and is restarted with backoff. That
+# There is no `depends_on` here and no equivalent. `pacioli serve` pings the
+# database once, for at most ten seconds (connectGrace, serve.go:41), and exits
+# non-zero if the ping fails. Until postgres-0 is ready the name `postgres` does
+# not resolve, so the ping fails within a few seconds and seldom waits out the
+# ten. A pod that starts before Postgres is ready dies and is restarted with
+# backoff. That
 # is the intended behavior and not a fault to design around: the restart is the
 # dependency ordering, and `kubectl get pods -w` shows it happening.
 apiVersion: v1
@@ -78,12 +81,18 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
+          # The limit is read off DESIGN.md 25. Four hundred requests at once
+          # peak at 127 MB carrying ordinary entries and 222 MB carrying the
+          # largest entry the endpoint accepts, so 128Mi would OOMKill a pod
+          # under load it is meant to serve. The server does not bound how many
+          # requests it holds at once, so past about four hundred of the largest
+          # entries this limit is reached too.
           resources:
             requests:
               cpu: 50m
               memory: 32Mi
             limits:
-              memory: 128Mi
+              memory: 256Mi
           # drainGrace is 15s (serve.go:44). Give the pod more than that, or
           # Kubernetes kills it in the middle of its own clean shutdown.
       terminationGracePeriodSeconds: 30

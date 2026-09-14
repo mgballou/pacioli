@@ -5,9 +5,8 @@
 # applies the manifests, and posts a balanced entry through the Service. It
 # fails if any of that stops being true.
 #
-# The point is not the cluster. The point is the badge: a stranger reading the
-# repo can see that the manifests in it were applied to a real cluster on the
-# last commit, rather than written and never run.
+# A green run says the manifests in the repository were applied to a real
+# cluster on that commit and answered through the Service.
 name: kubernetes
 
 on: [push, pull_request]
