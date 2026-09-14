@@ -39,8 +39,11 @@ type badField struct {
 var jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
 
 // decode reads r's body into v, a pointer to one of this package's request
-// types, and answers r itself when the body cannot be read. It reports whether
-// v was filled.
+// types, reading no more than ceiling bytes of it, and answers r itself when
+// the body cannot be read. It reports whether v was filled.
+//
+// The ceiling is the endpoint's, because it is the endpoint that knows what it
+// takes. DESIGN.md 25.
 //
 // Handing the whole body to encoding/json is two lines and was what this was.
 // What that will not do is name the field when the field owns its own reading:
@@ -48,8 +51,8 @@ var jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
 // request body is not json this endpoint can read", of a body that was good
 // json throughout. Nor will it look for a second bad field once it has found
 // the first.
-func (s *server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+func (s *server) decode(w http.ResponseWriter, r *http.Request, v any, ceiling int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, ceiling)
 
 	dec := json.NewDecoder(r.Body)
 	var raw json.RawMessage
@@ -173,8 +176,20 @@ func readLeaf(raw json.RawMessage, v reflect.Value, path string) []badField {
 	return nil
 }
 
+// counted is every array field an endpoint holds to a number of elements, by
+// the json name the endpoint takes it under. Flat for the reason bounded and
+// shaped are, and read by both endpoints, because both read a body through
+// decode.
+var counted = map[string]int{"postings": maxPostings}
+
 // readArray reads a json array into a slice, element by element, so a fault in
 // the third one is named as the third.
+//
+// It reads no further than counted allows. Past that the answer is already the
+// count — the endpoint refuses it, and says so with the whole length, which the
+// slice still carries — so reading the rest decides nothing and costs
+// everything: a body of 5,500 legs was walked in full to be told it may carry a
+// thousand. DESIGN.md 25.
 func readArray(raw json.RawMessage, v reflect.Value, path string) []badField {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
@@ -182,8 +197,13 @@ func readArray(raw json.RawMessage, v reflect.Value, path string) []badField {
 	}
 	v.Set(reflect.MakeSlice(v.Type(), len(items), len(items)))
 
+	read := len(items)
+	if most, ok := counted[leaf(path)]; ok && read > most {
+		read = most
+	}
+
 	var bad []badField
-	for i, item := range items {
+	for i, item := range items[:read] {
 		bad = append(bad, readValue(item, v.Index(i), fmt.Sprintf("%s[%d]", path, i))...)
 	}
 	return bad

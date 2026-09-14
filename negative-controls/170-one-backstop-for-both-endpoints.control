@@ -1,0 +1,11 @@
+# The 1 MB body was one backstop for two endpoints, and twenty-two times the
+# largest entry either of them takes. Four hundred concurrent 1 MB bodies of
+# 22,000 legs held 1,476 MB, all of it refused.
+
+title: the transaction body is the old megabyte backstop again
+file: internal/ledgerhttp/transactions.go
+run: go test -count=1 -run TestEachEndpointReadsOnlyTheBodyItsOwnBoundsAllow -v ./internal/ledgerhttp/
+--- before
+const maxTransactionBody = 256 << 10
+--- after
+const maxTransactionBody = 1 << 20

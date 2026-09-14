@@ -1,0 +1,11 @@
+# An account is four short fields, and its endpoint reading the body a
+# thousand-leg entry needs is what let one megabyte of names no endpoint
+# defines hold 10,062 MB across four hundred requests.
+
+title: opening an account reads the body a transaction is allowed
+file: internal/ledgerhttp/accounts.go
+run: go test -count=1 -run TestTheBodyCeilingIsTheEndpointsOwn -v ./internal/ledgerhttp/
+--- before
+const maxAccountBody = 4 << 10
+--- after
+const maxAccountBody = maxTransactionBody

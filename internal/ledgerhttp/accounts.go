@@ -9,6 +9,15 @@ import (
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
+// maxAccountBody is the most of a body this endpoint reads.
+//
+// An account is four fields the schema already bounds: a 64-character code, a
+// 100-character name, a kind out of five and a three-letter currency. All four
+// at their ceilings, in the widest runes the CHECKs allow, is 521 bytes — 546
+// indented by four, and 1,641 with every character sent as \uXXXX. Four
+// kilobytes is past all of them. DESIGN.md 25.
+const maxAccountBody = 4 << 10
+
 // accountRequest is the whole of what this endpoint accepts. The set is closed.
 type accountRequest struct {
 	Code     string `json:"code"`
@@ -25,7 +34,7 @@ func (s *server) openAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req accountRequest
-	if !s.decode(w, r, &req) {
+	if !s.decode(w, r, &req, maxAccountBody) {
 		return
 	}
 
