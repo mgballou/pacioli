@@ -12,9 +12,8 @@ import (
 // ErrAccountExists means the code is already held.
 var ErrAccountExists = errors.New("an account already holds that code")
 
-// CodeShape and NameShape put accounts_code_check and accounts_name_check, the
-// CHECKs in internal/schema, into words a client can act on. MaxCode and MaxName
-// are the lengths those words allow, counted in characters and not bytes.
+// MaxCode and MaxName are the lengths accounts_code_check and accounts_name_check
+// allow, in characters. CodeShape and NameShape put the CHECKs into words.
 const (
 	MaxCode = 64
 	MaxName = 100
@@ -26,8 +25,7 @@ var (
 	NameShape = fmt.Sprintf("1 to %d characters, %s", MaxName, NotBlank)
 )
 
-// An Account is the chart-of-accounts row a client asks for. The id and the
-// creation time are the database's.
+// An Account is the chart-of-accounts row a client asks for.
 type Account struct {
 	Code     string // e.g. "assets.cash" — lower case, dotted, unique
 	Name     string // what it is called on a report
@@ -35,8 +33,7 @@ type Account struct {
 	Currency string // three capitals, and the only currency the account holds
 }
 
-// openSavepoint wraps the insert so a refusal leaves the caller's transaction
-// usable.
+// openSavepoint wraps the insert so a refusal leaves the transaction usable.
 const openSavepoint = "ledger_open"
 
 // Open adds an account to the chart. A refused open leaves nothing behind and
@@ -64,15 +61,13 @@ func Open(ctx context.Context, tx *sql.Tx, a Account) error {
 	return nil
 }
 
-// A refusal is what a second look at the chart adds to a refused open. Both
-// fields are empty when the read could not be made.
+// A refusal is what a second look at the chart adds to a refused open.
 type refusal struct {
 	holder string
 	kinds  []string
 }
 
-// secondLook reads only what the refusal at hand can use, and only after the
-// savepoint has put the transaction back.
+// secondLook reads only what the refusal at hand can use.
 func secondLook(ctx context.Context, tx *sql.Tx, err error, a Account) refusal {
 	switch code(err) {
 	case "23505":
@@ -98,8 +93,7 @@ func holderOf(ctx context.Context, tx *sql.Tx, accountCode string) string {
 	return fmt.Sprintf("%q (%s, %s)", shown(name), kind, currency)
 }
 
-// classifyOpen turns the server's refusal into one of this package's values,
-// carrying the values the caller gave and the set it should have chosen from.
+// classifyOpen turns the server's refusal into one of this package's values.
 func classifyOpen(err error, a Account, more refusal) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {

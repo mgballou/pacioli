@@ -19,24 +19,12 @@ import (
 	"github.com/mgballou/pacioli/internal/ledger"
 )
 
-// maxTransactionBody is the most of a body this endpoint reads.
-//
-// It is what maxPostings already implies. The largest entry this endpoint
-// accepts is a thousand legs at the schema's own ceilings — a 64-character code
-// and a full-width amount on every leg, a 500-character description — and that
-// entry is 117,091 bytes, or 163,121 indented by four. A quarter of a megabyte
-// is half again on top of the larger of those. DESIGN.md 25.
+// maxTransactionBody is the most of a body this endpoint reads. It is what
+// maxPostings implies: the largest entry it takes is 163,121 bytes indented.
 const maxTransactionBody = 256 << 10
 
-// maxPostings bounds the legs one entry may carry.
-//
-// The body was all that bounded them, and at 1 MB it let one entry carry 20,900
-// legs and take 21 seconds. A thousand is past anything double entry produces —
-// most entries have two, a consolidated payroll or settlement journal has
-// hundreds — and it holds one request to a thousand round trips and a response
-// of tens of kilobytes rather than a megabyte. maxTransactionBody is read off
-// this number now, and the decoder reads no further into an entry than it
-// allows. DESIGN.md 16 and 25.
+// maxPostings bounds the legs one entry may carry. A thousand is past anything
+// double entry produces, and the decoder reads no further into an entry.
 const maxPostings = 1000
 
 // The headers the idempotency contract is carried on.
@@ -51,8 +39,7 @@ type postingBody struct {
 	AmountMinor int64  `json:"amount_minor"`
 }
 
-// transactionRequest is the whole of what this endpoint accepts. The set is
-// closed.
+// transactionRequest is the whole of what this endpoint accepts; the set is closed.
 type transactionRequest struct {
 	Currency    string        `json:"currency"`
 	Description string        `json:"description"`
@@ -62,8 +49,7 @@ type transactionRequest struct {
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
-// value hands back what this request carried under a json field name. The amount
-// comes off the leg the server named, because the body holds one per posting.
+// value hands back what this request carried under a json field name.
 func (t transactionRequest) value(field string, leg *ledger.LegError) string {
 	switch field {
 	case "currency":
@@ -78,10 +64,8 @@ func (t transactionRequest) value(field string, leg *ledger.LegError) string {
 	return ""
 }
 
-// net returns the sum of the legs and how many there were. A ledger.Minor, not
-// an int64: an entry can carry two amounts the ledger will each hold and still
-// net past the width of one of them, and that net is the whole of the answer a
-// refusal owes.
+// net returns the sum of the legs and how many there were. A ledger.Minor, because
+// two amounts the ledger will each hold can still net past the width of one.
 func (t transactionRequest) net() (ledger.Minor, int) {
 	var sum ledger.Minor
 	for _, p := range t.Postings {
@@ -108,9 +92,7 @@ type unbalancedBody struct {
 }
 
 func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
-	// First, because it is what decides whether the body should have been sent
-	// at all, and because Idempotency-Key is not the thing standing between
-	// this endpoint and a browser.
+	// First: it decides whether the body should have been sent at all.
 	if !s.declaredJSON(w, r) {
 		return
 	}
@@ -160,8 +142,7 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One transaction holds the reservation, the post and the read-back. A replay
-	// opens one too, because which it is only becomes known at the reservation.
+	// One transaction holds the reservation, the post and the read-back.
 	var (
 		rec    ledger.Record
 		stored ledger.Entry
@@ -182,8 +163,7 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The id is an address, not a receipt: GET /v1/transactions/{id} serves it,
-	// and it is the same header a replay carries.
+	// The id is an address, not a receipt: GET /v1/transactions/{id} serves it.
 	w.Header().Set("Location", "/v1/transactions/"+rec.Transaction)
 
 	if rec.Replayed {
@@ -200,13 +180,11 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// transaction serves one entry the ledger holds, in the shape the write that
-// created it answered with.
+// transaction serves one entry the ledger holds.
 func (s *server) transaction(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	// held, not id: Postgres takes a uuid in more spellings than it writes one
-	// in, so the answer carries the ledger's id and not the caller's version of it.
+	// held, not id: Postgres takes a uuid in more spellings than it writes one in.
 	var (
 		held string
 		e    ledger.Entry
@@ -224,8 +202,7 @@ func (s *server) transaction(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, http.StatusOK, entryBody(held, e))
 }
 
-// claimOf fingerprints a request, so a key reused with a different one can be
-// told from a retry.
+// claimOf fingerprints a request, so a reused key can be told from a retry.
 func claimOf(key string, req transactionRequest) (ledger.Claim, error) {
 	canonical, err := json.Marshal(req)
 	if err != nil {
@@ -252,10 +229,8 @@ func entryBody(transaction string, e ledger.Entry) transactionBody {
 	return body
 }
 
-// Every field name each endpoint takes, at any depth, read off the wire types
-// so a refusal cannot drift from what the endpoint accepts. Flat because
-// refusedField matches one Postgres column name against it, and a column names
-// no path.
+// Every field name each endpoint takes, at any depth, read off the wire types.
+// Flat, because refusedField matches one Postgres column name against it.
 var (
 	transactionFields = jsonFields(reflect.TypeFor[transactionRequest]())
 	accountFields     = jsonFields(reflect.TypeFor[accountRequest]())
@@ -290,17 +265,13 @@ func jsonFields(t reflect.Type) []string {
 }
 
 // shaped is every field the json words would misdescribe, with the rule in words
-// instead. json has one kind of number, so "number" is true of 100.5 and says
-// nothing; what the ledger takes is the whole number of minor units. json has no
-// date at all. The names are the json field names the endpoints take, and both
-// endpoints read this, because both read a body through decode.
+// instead: json has one kind of number, and no date at all.
 var shaped = map[string]string{
 	"amount_minor": ledger.AmountShape,
 	"occurred_at":  ledger.TimeShape,
 }
 
-// wants says what a field would have taken. The rule where a field has one, and
-// the json kind of its type where it does not.
+// wants says what a field would have taken.
 func wants(field string, t reflect.Type) string {
 	if shape, ok := shaped[leaf(field)]; ok {
 		return shape
@@ -308,8 +279,7 @@ func wants(field string, t reflect.Type) string {
 	return jsonKind(t)
 }
 
-// leaf is the last name in the path the decoder reports, so a field nested in an
-// array of objects — "postings.amount_minor" — is found by its own name.
+// leaf is the last name in the path the decoder reports.
 func leaf(field string) string {
 	if i := strings.LastIndex(field, "."); i >= 0 {
 		return field[i+1:]
@@ -317,12 +287,8 @@ func leaf(field string) string {
 	return field
 }
 
-// jsonKind says what a field wanted in the words json uses, rather than in a Go
-// type name the client has never heard of.
-//
-// A whole number and a number are told apart, because json is not: 100.5 is a
-// number, and answering an int64 field with "expected: number" tells a client
-// its own value was what it was asked for.
+// jsonKind says what a field wanted in the words json uses. A whole number and a
+// number are told apart, because json is not.
 func jsonKind(t reflect.Type) string {
 	if t == reflect.TypeFor[time.Time]() {
 		return "an RFC 3339 timestamp"
@@ -346,8 +312,7 @@ func jsonKind(t reflect.Type) string {
 }
 
 // refusedField reads the field a check refused off the constraint name, which
-// Postgres builds as <table>_<column>_check. A name that resolves to no field
-// the endpoint takes gives nothing back.
+// Postgres builds as <table>_<column>_check.
 func refusedField(err error, fields []string) string {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.ConstraintName == "" {
@@ -427,8 +392,7 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 			if leg == nil {
 				named.Parameter = field
 			}
-			// shown, not the value itself: a description the schema refused
-			// for its length would otherwise be handed back in full.
+			// shown, not the value: a long description would come back in full.
 			value := req.value(field, leg)
 			named.Value = shown(value)
 			bound(&named, field, value)

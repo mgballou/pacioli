@@ -1,6 +1,5 @@
-// Package ledger writes transactions to the ledger and derives its balances.
-// The constraints live in the schema; this package writes, asks the server, and
-// turns the refusal into an error a caller can switch on.
+// Package ledger writes transactions to the ledger and derives its balances. The
+// constraints live in the schema; this package turns a refusal into an error.
 package ledger
 
 import (
@@ -27,8 +26,8 @@ var (
 	// ErrCurrencyMismatch means a leg's account holds another currency.
 	ErrCurrencyMismatch = errors.New("account currency is not the transaction currency")
 
-	// ErrRejected is every refusal this package does not name on its own;
-	// unwrap to *pgconn.PgError for the SQLSTATE and the server's own words.
+	// ErrRejected is every refusal this package does not name on its own. Unwrap
+	// to *pgconn.PgError for the SQLSTATE and the server's own words.
 	ErrRejected = errors.New("a rule in the schema refused it")
 )
 
@@ -37,25 +36,21 @@ var (
 	// ErrUnknownTransaction means no transaction holds that id.
 	ErrUnknownTransaction = errors.New("no such transaction")
 
-	// ErrBadTransactionID means the id is not the shape an id takes, so no
-	// transaction can hold it.
+	// ErrBadTransactionID means the id is not the shape an id takes.
 	ErrBadTransactionID = errors.New("that is not a transaction id")
 )
 
-// IDShape puts the transactions primary key, the uuid in internal/schema, into
-// words a client can act on.
+// IDShape puts the transactions primary key into words a client can act on.
 const IDShape = "the uuid POST /v1/transactions answered with"
 
-// A LegError says which leg of an entry the server refused, and what that leg
-// carried.
+// A LegError says which leg of an entry the server refused, and what it carried.
 type LegError struct {
 	Index       int    // where the leg sat in Entry.Legs
 	Account     string // the code that leg named
 	AmountMinor int64  // what that leg tried to move
 	Err         error  // the refusal, wrapping the server's own *pgconn.PgError
 
-	// Holds is the currency the account actually holds, filled in only for
-	// ErrCurrencyMismatch.
+	// Holds is the currency the account holds, only for ErrCurrencyMismatch.
 	Holds string
 }
 
@@ -66,28 +61,20 @@ func (e *LegError) Error() string {
 // Unwrap keeps errors.Is working through a LegError.
 func (e *LegError) Unwrap() error { return e.Err }
 
-// NotBlank is what the schema means by blank, in the words a refusal uses. It is
-// said once here because is_blank and has_control_character are asked once each
-// in internal/schema, of every field that holds a person's words.
+// NotBlank is what the schema means by blank, in the words a refusal uses.
 const NotBlank = "at least one that is not a space, a tab or a line break, and no control characters"
 
-// AmountShape puts postings.amount_minor, the bigint column in internal/schema,
-// into words a client can act on. It is the rule a bare "number" cannot say:
-// json has one kind of number and this ledger takes only whole ones.
+// AmountShape puts postings.amount_minor into words a client can act on.
 var AmountShape = fmt.Sprintf(
 	"a whole number of minor units, so 100.50 is 10050, from %d to %d", int64(math.MinInt64), int64(math.MaxInt64))
 
-// DescriptionShape puts transactions_description_check, the CHECK in
-// internal/schema, into words a client can act on. MaxDescription is the length
-// those words allow, counted in characters and not bytes.
+// MaxDescription is the length transactions_description_check allows, counted in
+// characters. DescriptionShape puts that CHECK into words a client can act on.
 const MaxDescription = 500
 
 var DescriptionShape = fmt.Sprintf("1 to %d characters, %s", MaxDescription, NotBlank)
 
-// TimeShape puts what transactions.occurred_at takes on the wire into words a
-// client can act on. The column is a timestamptz and json has no date, so the
-// rule is the one encoding/json holds a time.Time to, said out loud with a
-// timestamp that satisfies it.
+// TimeShape puts what transactions.occurred_at takes on the wire into words.
 const TimeShape = "an RFC 3339 timestamp, as in 2026-09-07T14:30:00Z"
 
 // A Leg is one side of a transaction: an account code and a signed amount in
@@ -103,13 +90,12 @@ type Entry struct {
 	Description string
 	Legs        []Leg
 
-	// OccurredAt is when the money moved, which is not always when the row was
-	// written. Zero means now.
+	// OccurredAt is when the money moved. Zero means now.
 	OccurredAt time.Time
 }
 
-// net returns what the legs sum to and how many there were. The sum is a Minor,
-// not an int64: two legs the schema will each hold can still sum past one.
+// net returns what the legs sum to and how many there were. A Minor, because two
+// legs the schema will each hold can still sum past one.
 func (e Entry) net() (Minor, int) {
 	var sum Minor
 	for _, leg := range e.Legs {
@@ -124,9 +110,8 @@ const balanceConstraints = "transactions_must_balance, balance_checks_must_balan
 // savepoint is reused: a second SAVEPOINT of the same name hides the first.
 const savepoint = "ledger_post"
 
-// Post writes an entry and returns the id of the transaction it created. A
-// refused entry leaves tx usable, and Once is the entry point for a caller
-// whose client retries.
+// Post writes an entry and returns the id of the transaction it created. A refused
+// entry leaves tx usable; Once is the entry point for a caller whose client retries.
 func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+savepoint); err != nil {
 		return "", fmt.Errorf("savepoint: %w", err)
@@ -148,8 +133,7 @@ func Post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 }
 
 func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
-	// An earlier SET CONSTRAINTS could have left these immediate, and then the
-	// first leg of every entry would be refused on its own.
+	// An earlier SET CONSTRAINTS could have left these immediate.
 	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` DEFERRED`); err != nil {
 		return "", fmt.Errorf("defer the balance check: %w", err)
 	}
@@ -168,8 +152,7 @@ func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 	}
 
 	for i, leg := range e.Legs {
-		// A LEFT JOIN rather than a WHERE, so a code no account holds arrives
-		// as a NULL account_id and is refused rather than silently dropped.
+		// A LEFT JOIN, so a code no account holds arrives as a NULL account_id.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO postings (transaction_id, account_id, currency, amount_minor)
 			 SELECT $1, a.id, a.currency, $3
@@ -191,14 +174,9 @@ func post(ctx context.Context, tx *sql.Tx, e Entry) (string, error) {
 	return id, nil
 }
 
-// EntryOf reads back the entry a transaction holds, legs in posting order. It
-// is what serves GET /v1/transactions/{id}, and what a replayed write answers
-// from. The id it returns is the one the book holds: Postgres takes a uuid in
-// more spellings than it writes one in, and the answer should carry the ledger's.
-//
-// The id is a client's, so both ways it can name nothing are named: a well
-// formed uuid the book does not hold, and a string that is not a uuid at all.
-// The cast is what tells them apart, and Postgres refuses it with 22P02.
+// EntryOf reads back the entry a transaction holds, legs in posting order. The id
+// it returns is the one the book holds, and both ways a client's id can name
+// nothing are told apart: no such transaction, and not a transaction id at all.
 func EntryOf(ctx context.Context, tx *sql.Tx, id string) (string, Entry, error) {
 	var (
 		held string
@@ -244,8 +222,7 @@ func EntryOf(ctx context.Context, tx *sql.Tx, id string) (string, Entry, error) 
 	return held, e, nil
 }
 
-// classify turns the server's refusal into one of the errors above, carrying
-// back whatever of the entry the refusal was about.
+// classify turns the server's refusal into one of the errors above.
 func classify(err error, e Entry, legIndex int, leg Leg) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
@@ -291,8 +268,7 @@ func legErr(index int, leg Leg, reason error, pgErr *pgconn.PgError) error {
 	}
 }
 
-// explain adds what only a second look at the ledger can say. A read that
-// answers nothing leaves the refusal exactly as it was.
+// explain adds what only a second look at the ledger can say.
 func explain(ctx context.Context, tx *sql.Tx, err error, e Entry) error {
 	var leg *LegError
 	if !errors.As(err, &leg) || !errors.Is(err, ErrCurrencyMismatch) {

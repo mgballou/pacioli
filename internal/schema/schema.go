@@ -1,5 +1,4 @@
-// Package schema holds the ledger's data definition and applies it.
-// 0001_ledger.sql is embedded verbatim and executed as written.
+// Package schema embeds the ledger's data definition and applies it verbatim.
 package schema
 
 import (
@@ -14,8 +13,7 @@ import (
 //go:embed 0001_ledger.sql
 var SQL string
 
-// applyLockID is an arbitrary constant for pg_advisory_xact_lock. Test packages
-// run in parallel against one database, so two can reach Apply at once.
+// applyLockID is an arbitrary constant for pg_advisory_xact_lock.
 const applyLockID = 0x1ed6e11ab
 
 // Apply installs the schema if it is not already there and reports whether it

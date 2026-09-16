@@ -22,32 +22,25 @@ import (
 )
 
 const (
-	// defaultAddr is loopback, so running the binary does not put the
-	// database on the network. The container listens on 0.0.0.0 instead,
-	// because a published port cannot reach a process bound to the
-	// container's own loopback; the Dockerfile says so where it sets it.
+	// Loopback, so the binary does not put the ledger on the network. The
+	// container listens on 0.0.0.0, and the Dockerfile says so where it sets it.
 	defaultAddr = "127.0.0.1:8080"
 
-	// defaultDSN is the compose database, written out rather than taken from
-	// internal/testdb, which imports "testing"; a test holds the two against
-	// each other.
+	// defaultDSN is compose.test.yaml's, written out because internal/testdb
+	// imports "testing". A test holds the two against each other.
 	defaultDSN = "postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable"
 
 	addrEnv = "LEDGER_ADDR"
 	dsnEnv  = "LEDGER_DSN"
 
-	// connectGrace bounds the first connection, so a database that is starting
-	// rather than absent does not hang the process.
+	// connectGrace bounds the first connection to the database.
 	connectGrace = 10 * time.Second
 
 	// drainGrace bounds the wait for in-flight requests after the signal.
 	drainGrace = 15 * time.Second
 )
 
-// The deadlines the listener is held to. Every one is a ceiling on something a
-// client controls, and the zero value of each is no ceiling at all, which is
-// what they were. DESIGN.md 18 argues the numbers; graces below carries them
-// to the flags.
+// The deadlines the listener is held to. graces carries them to the flags.
 const (
 	readHeaderGrace = 10 * time.Second
 	readGrace       = 30 * time.Second
@@ -57,21 +50,16 @@ const (
 	idleGrace       = 120 * time.Second
 )
 
-// The ceilings the database keeps on its own, sent as startup parameters so
-// they hold from a connection's first statement. They are the backstop for the
-// request deadline: cancelling a query is a second connection and a best-effort
-// message, and these do not depend on it arriving.
-//
-// A connection string that sets one of these keeps its own value, which is
-// where a deployer changes them.
+// The ceilings the database keeps on its own, sent as startup parameters so they
+// hold from a connection's first statement. A connection string that sets one of
+// these keeps its own value.
 var databaseGraces = map[string]string{
 	"statement_timeout":                   "20s",
 	"lock_timeout":                        "10s",
 	"idle_in_transaction_session_timeout": "30s",
 }
 
-// deadlines is what the server is held to, once flags and environment are
-// settled.
+// deadlines is what the server is held to, once flags and environment are settled.
 type deadlines struct {
 	readHeader time.Duration
 	read       time.Duration
@@ -82,9 +70,7 @@ type deadlines struct {
 }
 
 // A grace is one deadline a deployer can move: the flag that sets it, what it
-// bounds, the value it holds when nothing sets it, and the field it settles
-// into. The four are in one place so the flag, the environment variable and the
-// field cannot drift apart.
+// bounds, its default, and the field it settles into.
 type grace struct {
 	flag string
 	why  string
@@ -109,8 +95,7 @@ func graces(d *deadlines) []grace {
 	}
 }
 
-// defaultDeadlines is what the graces settle to when nothing sets them, read
-// off the same table the flags are built from.
+// defaultDeadlines is what the graces settle to when nothing sets them.
 func defaultDeadlines() deadlines {
 	var d deadlines
 	for _, g := range graces(&d) {
@@ -126,8 +111,7 @@ type config struct {
 	deadlines deadlines
 }
 
-// parseServe reads the flags, falling back to the environment and then to the
-// defaults above.
+// parseServe reads the flags, then the environment, then the defaults.
 func parseServe(args []string, stderr io.Writer, getenv func(string) string) (config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -136,13 +120,11 @@ func parseServe(args []string, stderr io.Writer, getenv func(string) string) (co
 		fs.PrintDefaults()
 	}
 
-	// Empty rather than the default, so a flag that was given and a flag that
-	// holds the default are different states.
+	// Empty rather than the default, so given and defaulted are different states.
 	addr := fs.String("addr", "", "listen address, host:port (default "+defaultAddr+", or $"+addrEnv+")")
 	dsn := fs.String("dsn", "", "postgres connection string (default compose.test.yaml's, or $"+dsnEnv+")")
 
-	// Zero rather than the default, for the same reason. Zero is also what
-	// net/http reads as no deadline, so it is refused below rather than kept.
+	// Zero for the same reason, and net/http reads zero as no deadline at all.
 	var settled deadlines
 	gs := graces(&settled)
 	given := make([]*time.Duration, len(gs))
@@ -173,8 +155,7 @@ func parseServe(args []string, stderr io.Writer, getenv func(string) string) (co
 	}, nil
 }
 
-// serveFlags is the closed set a refusal lists, read off the same table the
-// flags were built from.
+// serveFlags is the closed set a refusal lists.
 func serveFlags(gs []grace) []string {
 	out := []string{"-addr", "-dsn"}
 	for _, g := range gs {
@@ -193,8 +174,7 @@ func firstSet(values ...string) string {
 	return ""
 }
 
-// firstDuration settles one deadline: the flag if it was given, then the
-// environment, then the default.
+// firstDuration settles one deadline: the flag, then the environment, then the default.
 func firstDuration(flagged time.Duration, env string, def time.Duration) (time.Duration, error) {
 	if flagged != 0 {
 		return positive(flagged)
@@ -209,9 +189,7 @@ func firstDuration(flagged time.Duration, env string, def time.Duration) (time.D
 	return def, nil
 }
 
-// positive refuses the value that started all of this. To net/http a deadline
-// of zero is no deadline, so a deployer who means "no ceiling" has to say it
-// somewhere other than here.
+// positive refuses a deadline of zero, which to net/http is no deadline at all.
 func positive(d time.Duration) (time.Duration, error) {
 	if d <= 0 {
 		return 0, fmt.Errorf("a deadline of %s is no deadline at all, which is what these flags exist to end. Give a positive duration", d)
@@ -219,16 +197,14 @@ func positive(d time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// serve opens the database, mounts the read surface on it and runs until ctx is
-// done.
+// serve opens the database, mounts the read surface on it and runs until ctx is done.
 func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(string) string) error {
 	cfg, err := parseServe(args, stderr, getenv)
 	if err != nil {
 		return err
 	}
 
-	// One logger for the lifecycle lines and the causes behind a 500. Requests
-	// and their bodies are not logged.
+	// One logger for the lifecycle lines and the causes behind a 500.
 	lg := log.New(stderr, "", log.LstdFlags)
 
 	db, err := open(ctx, cfg.dsn)
@@ -237,8 +213,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 	}
 	defer db.Close()
 
-	// The compose database is a tmpfs and starts empty, so without this the
-	// first request to a fresh container is a 500 about a missing table.
+	// The compose database is a tmpfs and starts empty.
 	applied, err := schema.Apply(ctx, db)
 	if err != nil {
 		return fmt.Errorf("apply the schema to %s: %w", redacted(cfg.dsn), err)
@@ -257,10 +232,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 	return serveOn(ctx, ln, ledgerhttp.Handler(store(db, cfg.deadlines), lg), cfg.deadlines, lg)
 }
 
-// store is what the handler is given: the pool, and the ceiling on how long a
-// request may wait for one of its sixteen connections. Without the ceiling a
-// request past what the pool can serve waits its whole budget to be refused.
-// DESIGN.md 24.
+// store is the pool, and the ceiling on the wait for one of its connections.
 func store(db *sql.DB, d deadlines) ledgerhttp.Pool {
 	return ledgerhttp.Pool{DB: db, Acquire: d.acquire}
 }
@@ -279,9 +251,7 @@ func open(ctx context.Context, dsn string) (*sql.DB, error) {
 
 	db := stdlib.OpenDB(*cfg)
 
-	// The default is unlimited, which can exhaust Postgres's own connection
-	// limit under load. What happens to a request past the sixteenth is
-	// -acquire-timeout's, and DESIGN.md 24's.
+	// The default is unlimited, which can exhaust Postgres's own connection limit.
 	db.SetMaxOpenConns(16)
 	db.SetMaxIdleConns(8)
 	db.SetConnMaxLifetime(30 * time.Minute)
@@ -296,8 +266,7 @@ func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// redacted is the connection string with its password taken out. A DSN that will
-// not parse is reported as a placeholder rather than as itself.
+// redacted is the connection string with its password taken out.
 func redacted(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -306,8 +275,7 @@ func redacted(dsn string) string {
 	return u.Redacted()
 }
 
-// serveOn serves h on ln until ctx is done, then drains and returns. It takes a
-// listener so a test can serve on a port the kernel picked.
+// serveOn serves h on ln until ctx is done, then drains and returns.
 func serveOn(ctx context.Context, ln net.Listener, h http.Handler, d deadlines, lg *log.Logger) error {
 	srv := newServer(h, d, lg)
 
@@ -334,14 +302,8 @@ func serveOn(ctx context.Context, ln net.Listener, h http.Handler, d deadlines, 
 	return nil
 }
 
-// newServer is the listener's whole posture in one place, so a test can read it
-// back rather than infer it from behaviour.
-//
-// The four connection deadlines bound the socket. They do not bound the work:
-// WriteTimeout closes a connection, it does not stop the handler behind it, and
-// a handler waiting on the database would go on holding a connection out of a
-// pool of sixteen. ledgerhttp.Deadline is what bounds the work, by putting the
-// budget on the request's context.
+// newServer is the listener's whole posture in one place. The four deadlines here
+// bound the socket; ledgerhttp.Deadline is what bounds the work behind it.
 func newServer(h http.Handler, d deadlines, lg *log.Logger) *http.Server {
 	return &http.Server{
 		Handler:           ledgerhttp.Deadline(d.request, h),
@@ -353,9 +315,8 @@ func newServer(h http.Handler, d deadlines, lg *log.Logger) *http.Server {
 	}
 }
 
-// drain closes the listener and waits for the requests already accepted, for up
-// to drainGrace. WithoutCancel because a deadline derived from an already
-// cancelled ctx would expire at once and cut a request off mid-answer.
+// drain closes the listener and waits for the requests already accepted, for up to
+// drainGrace. WithoutCancel, so a deadline off a cancelled ctx does not expire at once.
 func drain(ctx context.Context, srv *http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainGrace)
 	defer cancel()

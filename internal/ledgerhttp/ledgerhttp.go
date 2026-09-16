@@ -1,8 +1,5 @@
 // Package ledgerhttp serves the ledger over HTTP: accounts, balances, the trial
 // balance, and the two writes that open an account and post a transaction.
-//
-// The wire types are this package's own, so renaming a domain field breaks a
-// compile rather than a published API.
 package ledgerhttp
 
 import (
@@ -49,26 +46,20 @@ type Store interface {
 type Pool struct {
 	DB *sql.DB
 
-	// Acquire is how long a request may wait for one of the pool's
-	// connections before it is refused. Zero is no ceiling; the server refuses
-	// zero where the flag is read. DESIGN.md 24.
+	// Acquire is how long a request may wait for a connection. Zero is no ceiling.
 	Acquire time.Duration
 }
 
-// An OverloadError is a request the pool had no connection to lend inside
-// Acquire. Nothing was begun, so nothing was written and the request can be
-// sent again.
+// An OverloadError is a request the pool had no connection to lend inside Acquire.
+// Nothing was begun, so nothing was written and the request can be sent again.
 type OverloadError struct{ Ceiling time.Duration }
 
 func (e *OverloadError) Error() string {
 	return fmt.Sprintf("no connection out of the pool within %s", e.Ceiling)
 }
 
-// conn takes one of the pool's connections, waiting at most p.Acquire for it.
-//
-// The ceiling is on the wait alone. ctx goes on to carry the transaction, so a
-// request that gets a connection keeps the whole of its budget to work in, and
-// one that does not is refused now rather than at the end of that budget.
+// conn takes one of the pool's connections, waiting at most p.Acquire for it. The
+// ceiling is on the wait alone; ctx goes on to carry the transaction.
 func (p Pool) conn(ctx context.Context) (*sql.Conn, error) {
 	if p.Acquire <= 0 {
 		return p.DB.Conn(ctx)
@@ -77,19 +68,15 @@ func (p Pool) conn(ctx context.Context) (*sql.Conn, error) {
 	defer cancel()
 
 	c, err := p.DB.Conn(waited)
-	// The request's own budget running out, or the client going away, is the
-	// refusal cancelled already names. This is the queue being too deep.
+	// Not the request's own budget and not a client that went away: a full queue.
 	if err != nil && ctx.Err() == nil && waited.Err() != nil {
 		return nil, &OverloadError{Ceiling: p.Acquire}
 	}
 	return c, err
 }
 
-// Read implements Reader, on a transaction Postgres will not let a handler
-// write through. REPEATABLE READ is what makes the one-snapshot claim above
-// true: at READ COMMITTED every statement takes its own snapshot, and a
-// response built from two of them can be built from two different ledgers.
-// DESIGN.md 19.
+// Read implements Reader, on a read-only REPEATABLE READ transaction, which is
+// what makes the one-snapshot claim above true.
 func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
 	c, err := p.conn(ctx)
 	if err != nil {
@@ -108,12 +95,9 @@ func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
 	return f(tx)
 }
 
-// Write implements Writer. Exactly one of Commit and Rollback is reached on
-// every path.
-//
-// READ COMMITTED, and said rather than inherited: the idempotency replay reads
-// a row another transaction committed after this one began, and only a snapshot
-// taken per statement can see it. DESIGN.md 19.
+// Write implements Writer, at READ COMMITTED, because the idempotency replay reads
+// a row another transaction committed after this one began. Exactly one of Commit
+// and Rollback is reached on every path.
 func (p Pool) Write(ctx context.Context, f func(tx *sql.Tx) error) error {
 	c, err := p.conn(ctx)
 	if err != nil {
@@ -156,20 +140,11 @@ type server struct {
 	errorLog *log.Logger
 }
 
-// jsonMediaType is the one content type the two writes take, and requiring it
-// is what keeps a browser from being made to send one.
-//
-// A cross-origin form or img or fetch that carries no custom header and one of
-// three content types — form-encoded, multipart, text/plain — is sent without
-// asking anybody first. Requiring application/json puts every write outside
-// that set, so a browser has to preflight it, and the mux answers OPTIONS with
-// 405. POST /v1/transactions was already outside it, but only because
-// Idempotency-Key is a custom header; that is an accident of the retry
-// contract, not a control, and this is the control.
+// jsonMediaType is the one content type the two writes take. Requiring it puts
+// every write outside the set a browser sends cross-origin without a preflight.
 const jsonMediaType = "application/json"
 
-// declaredJSON reports whether the request declares a json body, and refuses it
-// if not. The Content-Type is the client's, so it is handed back trimmed.
+// declaredJSON reports whether the request declares a json body, and refuses it if not.
 func (s *server) declaredJSON(w http.ResponseWriter, r *http.Request) bool {
 	declared := r.Header.Get("Content-Type")
 	if media, _, err := mime.ParseMediaType(declared); err == nil && media == jsonMediaType {
@@ -185,14 +160,12 @@ func (s *server) declaredJSON(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// Deadline gives every request the budget d and answers 503 when it runs out.
-// The budget goes on the request's context, so a handler waiting on the
-// database is cancelled and gives its connection back, rather than being merely
-// disconnected from a client that has already gone.
+// Deadline gives every request the budget d and answers 503 when it runs out. The
+// budget goes on the request's context, so a handler waiting on the database is
+// cancelled and gives its connection back.
 //
-// http.TimeoutHandler throws away the header the inner handler set when it
-// fires, so the content type goes on before the request goes in, where the
-// answer and the refusal both keep it.
+// The content type goes on before the request goes in, because http.TimeoutHandler
+// throws away the header the inner handler set when it fires.
 func Deadline(d time.Duration, h http.Handler) http.Handler {
 	timed := http.TimeoutHandler(h, d, tookTooLong(d))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -201,25 +174,17 @@ func Deadline(d time.Duration, h http.Handler) http.Handler {
 	})
 }
 
-// cancelled reports whether an error is the request having run out of budget,
-// the client having gone away, or the pooled connection having been left unusable
-// by one of those — rather than anything the ledger refused.
-//
-// driver.ErrBadConn is here because cancelling a query is what leaves a
-// connection unusable, and database/sql hands it back only after retrying on
-// fresh ones. It means the transaction was never begun, so nothing was written
-// and nothing can have been half written.
+// cancelled reports whether an error is the request having run out of budget, the
+// client having gone away, or the pooled connection one of those left unusable —
+// rather than anything the ledger refused. In every case nothing was written.
 func cancelled(err error) bool {
 	return errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, driver.ErrBadConn)
 }
 
-// gaveUp answers a request that never got as far as being refused. Deadline has
-// usually answered already and this body is thrown away; a handler that finishes
-// a moment before its budget instead is what this is for, and what it must not
-// be is a 500, because nothing internal went wrong and the same request sent
-// again is the right answer.
+// gaveUp answers a request that never got as far as being refused. Not a 500:
+// nothing internal went wrong, and the same request sent again is the right answer.
 func (s *server) gaveUp(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, http.StatusServiceUnavailable, errorBody{
 		Error:    "the ledger did not get to this request and nothing was written",
@@ -228,9 +193,7 @@ func (s *server) gaveUp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// notReached answers a request the ledger never got to, and reports whether it
-// did. Every handler asks this before it reads an error as a refusal, because
-// neither of these is one.
+// notReached answers a request the ledger never got to, and reports whether it did.
 func (s *server) notReached(w http.ResponseWriter, r *http.Request, err error) bool {
 	var busy *OverloadError
 	switch {
@@ -244,9 +207,8 @@ func (s *server) notReached(w http.ResponseWriter, r *http.Request, err error) b
 	return true
 }
 
-// busy answers a request the pool had no connection for. It carries Retry-After
-// because it is the one refusal here that says when: the queue was full for the
-// ceiling, so that is how long the client is asked to leave it. DESIGN.md 24.
+// busy answers a request the pool had no connection for. Retry-After is the
+// ceiling: the queue was full for that long, so that is how long to leave it.
 func (s *server) busy(w http.ResponseWriter, r *http.Request, ceiling time.Duration) {
 	w.Header().Set("Retry-After", retryAfter(ceiling))
 	s.write(w, r, http.StatusServiceUnavailable, errorBody{
@@ -256,9 +218,7 @@ func (s *server) busy(w http.ResponseWriter, r *http.Request, ceiling time.Durat
 	})
 }
 
-// retryAfter is the ceiling in the whole seconds Retry-After is counted in,
-// rounded up and never zero: a client told to come back in no time at all comes
-// straight back.
+// retryAfter is the ceiling in whole seconds, rounded up and never zero.
 func retryAfter(d time.Duration) string {
 	seconds := (d + time.Second - 1) / time.Second
 	if seconds < 1 {
@@ -267,14 +227,11 @@ func retryAfter(d time.Duration) string {
 	return strconv.FormatInt(int64(seconds), 10)
 }
 
-// tookTooLong is the body a request that ran out of budget is answered with,
-// in the shape every other refusal has.
+// tookTooLong is the body a request that ran out of budget is answered with.
 func tookTooLong(d time.Duration) string {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
-	// errorBody is four strings, so this cannot fail; the check is here
-	// because dropping the error would be the thing that hides it if it did.
 	if err := enc.Encode(errorBody{
 		Error:    "the ledger did not answer in time and the request was cancelled",
 		Expected: "an answer within " + d.String(),
@@ -295,8 +252,7 @@ type balanceBody struct {
 	Postings     int64        `json:"postings"`
 }
 
-// accountListBody wraps the rows in an object, which is what let a page be
-// added to it.
+// accountListBody wraps the rows in an object, so a page could be added to it.
 type accountListBody struct {
 	Accounts []balanceBody `json:"accounts"`
 
@@ -315,45 +271,39 @@ type trialBody struct {
 	Postings     int64        `json:"postings"`
 }
 
-// trialListBody wraps the rows in an object, which a bare array could not be
-// added to later.
+// trialListBody wraps the rows in an object.
 type trialListBody struct {
 	Trial []trialBody `json:"trial"`
 }
 
-// errorBody is what almost every refusal looks like: the rule, and what was
-// given against it.
+// errorBody is what almost every refusal looks like: the rule, and what broke it.
 type errorBody struct {
 	Error     string `json:"error"`
 	Code      string `json:"code,omitempty"`
 	Parameter string `json:"parameter,omitempty"`
 
-	// Value is what the request carried under Parameter, handed straight back,
-	// or where in the body the reading of it stopped.
+	// Value is what the request carried under Parameter, or where reading it stopped.
 	Value string `json:"value,omitempty"`
 
 	// Expected is the rule in words, for a set that is open but shaped.
 	Expected string `json:"expected,omitempty"`
 
-	// Characters is how long Value was before it was trimmed to fit, set only
-	// where the length is what broke the rule. Value alone cannot say how far
-	// over the limit a 100,000-character description was.
+	// Characters is how long Value was before it was trimmed, set only where the
+	// length is what broke the rule.
 	Characters int `json:"characters,omitempty"`
 
 	// Valid is the whole set, for a set that is closed.
 	Valid []string `json:"valid,omitempty"`
 
-	// Fields is every field a body got wrong, set only where it got more than
-	// one wrong. Parameter, Value, Expected and Valid name the first of them,
-	// and it is in here too, so a client that reads this list reads all of it.
+	// Fields is every field a body got wrong, set only where it got more than one
+	// wrong. The first of them is named at the top level too, and is in here.
 	Fields []badField `json:"fields,omitempty"`
 
 	// See is where the rule is written down. It is the same for every refusal.
 	See string `json:"see,omitempty"`
 }
 
-// validKinds takes the closed set off a *ledger.UnknownKindError, and nothing
-// off anything else.
+// validKinds takes the closed set off a *ledger.UnknownKindError.
 func validKinds(err error) []string {
 	var unknown *ledger.UnknownKindError
 	if errors.As(err, &unknown) {
@@ -362,9 +312,8 @@ func validKinds(err error) []string {
 	return nil
 }
 
-// bounded is every field the schema holds to a length, with the rule in words
-// and the characters it allows. The names are the schema's column names, which
-// are the json field names the endpoints take.
+// bounded is every field the schema holds to a length, with the rule in words. The
+// names are the schema's column names, which are the json names the endpoints take.
 var bounded = map[string]struct {
 	shape string
 	most  int
@@ -374,9 +323,8 @@ var bounded = map[string]struct {
 	"description": {ledger.DescriptionShape, ledger.MaxDescription},
 }
 
-// bound fills in the rule a bounded field is held to, and how long the value
-// was when the length is what broke it. A field the schema does not bound by
-// length leaves the refusal exactly as it was.
+// bound fills in the rule a bounded field is held to, and how long the value was
+// when the length is what broke it.
 func bound(body *errorBody, field, value string) {
 	b, ok := bounded[field]
 	if !ok {
@@ -417,25 +365,18 @@ func (s *server) balance(w http.ResponseWriter, r *http.Request) {
 // accountsQuery is the closed set of parameters GET /v1/accounts takes.
 var accountsQuery = map[string]bool{"currency": true, "kind": true, "limit": true, "after": true}
 
-// The page GET /v1/accounts answers with. defaultPage is what a request that
-// names no size gets; maxPage is the most one can ask for.
-//
-// The chart grows and the schema puts no ceiling on it, so the whole of it was
-// the answer: 200,000 accounts came back as 39 MB. A thousand is the number
-// this package already holds an entry's legs to, and a thousand accounts is a
-// response of a few hundred kilobytes. DESIGN.md 23.
+// The page GET /v1/accounts answers with: defaultPage where the request names no
+// size, maxPage the most it can ask for.
 const (
 	defaultPage = 100
 	maxPage     = 1000
 )
 
-// pageShape puts the page size into words a client can act on, the way
-// ledger.CodeShape does for a code.
+// pageShape puts the page size into words a client can act on.
 var pageShape = fmt.Sprintf("a whole number from 1 to %d", maxPage)
 
 func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
-	// Not r.URL.Query(): it drops the error, so `?%zz=1` would arrive as no
-	// parameters and be answered with the whole chart.
+	// Not r.URL.Query(): it drops the error, so `?%zz=1` would arrive as no parameters.
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		s.write(w, r, http.StatusBadRequest, errorBody{
@@ -465,8 +406,7 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 		Currency: q.Get("currency"),
 		Kind:     q.Get("kind"),
 		After:    q.Get("after"),
-		// One past the page, so the answer knows whether there is another page
-		// without counting the chart.
+		// One past the page, so the answer knows whether there is another.
 		Limit: page + 1,
 	}
 
@@ -497,9 +437,7 @@ func (s *server) accounts(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, http.StatusOK, body)
 }
 
-// pageSize reads the page size off the query. It is checked before the ledger
-// is asked, so a size this endpoint will not answer with costs a read of
-// nothing.
+// pageSize reads the page size off the query, before the ledger is asked.
 func (s *server) pageSize(w http.ResponseWriter, r *http.Request, q url.Values) (int, bool) {
 	asked := q.Get("limit")
 	if asked == "" {
@@ -519,8 +457,7 @@ func (s *server) pageSize(w http.ResponseWriter, r *http.Request, q url.Values) 
 	return page, true
 }
 
-// nextPage is where the rest of the answer is: the question that was asked, the
-// size it was answered at, and the last code this page reached.
+// nextPage is where the rest of the answer is.
 func nextPage(f ledger.AccountFilter, page int, last string) string {
 	q := url.Values{}
 	if f.Currency != "" {
@@ -534,16 +471,14 @@ func nextPage(f ledger.AccountFilter, page int, last string) string {
 	return "/v1/accounts?" + q.Encode()
 }
 
-// queryParameters is the closed set a refusal hands back, read off the same map
-// the refusal was made from.
+// queryParameters is the closed set a refusal hands back.
 func queryParameters() []string {
 	out := slices.Collect(maps.Keys(accountsQuery))
 	slices.Sort(out)
 	return out
 }
 
-// unknown returns the parameter names accountsQuery does not define, sorted so
-// the same request is always refused with the same one.
+// unknown returns the parameter names accountsQuery does not define, sorted.
 func unknown(q url.Values) []string {
 	var out []string
 	for name := range q {
@@ -567,9 +502,7 @@ func balanceOf(b ledger.Balance) balanceBody {
 	}
 }
 
-// trial serves one row per currency the chart holds, and takes no page. The
-// schema's currency CHECK is three capitals, so there are at most 17,576 rows
-// however large the chart grows. DESIGN.md 23.
+// trial serves one row per currency the chart holds, and takes no page.
 func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 	var rows []ledger.Trial
 	err := s.ledger.Read(r.Context(), func(tx *sql.Tx) error {
@@ -598,8 +531,7 @@ func (s *server) trial(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, http.StatusOK, body)
 }
 
-// fail turns an error from internal/ledger into a status. named carries whatever
-// part of the request is worth handing back.
+// fail turns an error from internal/ledger into a status.
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named errorBody) {
 	if s.notReached(w, r, err) {
 		return
@@ -617,8 +549,7 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named e
 		s.write(w, r, http.StatusBadRequest, named)
 		return
 	case errors.Is(err, ledger.ErrBadTransactionID):
-		// 400, not 404: the path segment could not name a transaction, so the
-		// ledger was never asked whether one holds it. DESIGN.md 10.
+		// 400, not 404: the segment could not name a transaction, so nothing was asked.
 		named.Error = "that is not a transaction id"
 		named.Expected = ledger.IDShape
 		s.write(w, r, http.StatusBadRequest, named)
@@ -628,18 +559,15 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error, named e
 		s.write(w, r, http.StatusNotFound, named)
 		return
 	}
-	// RequestURI rather than Path: on a list the query string is the half of
-	// the request that can be wrong.
+	// RequestURI rather than Path: on a list the query string can be the wrong half.
 	s.logf("%s %s: %v", r.Method, r.URL.RequestURI(), err)
 	s.write(w, r, http.StatusInternalServerError, errorBody{Error: "internal error"})
 }
 
-// write encodes into a buffer before it touches the ResponseWriter, so an encode
-// that fails cannot arrive as a 200 with a truncated body.
+// write encodes into a buffer first, so a failed encode cannot arrive as a 200.
 func (s *server) write(w http.ResponseWriter, r *http.Request, status int, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	// Indented for a human reading a transcript.
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
 		s.logf("%s %s: encode %T: %v", r.Method, r.URL.Path, v, err)
@@ -651,8 +579,7 @@ func (s *server) write(w http.ResponseWriter, r *http.Request, status int, v any
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.WriteHeader(status)
-	// ErrHandlerTimeout is Deadline having already answered this request, which
-	// is a refusal it accounted for and not a failure to log.
+	// ErrHandlerTimeout is Deadline having already answered; not a failure to log.
 	if _, err := w.Write(buf.Bytes()); err != nil && !errors.Is(err, http.ErrHandlerTimeout) {
 		s.logf("%s %s: write body: %v", r.Method, r.URL.Path, err)
 	}

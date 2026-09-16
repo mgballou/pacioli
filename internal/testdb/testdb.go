@@ -1,8 +1,5 @@
-// Package testdb hands tests a connection to the container-backed Postgres, and
-// a transaction that is always rolled back.
-//
-// Never a mock, and never a leak: a test sees its own writes and no other test's,
-// so the order tests run in cannot matter.
+// Package testdb hands tests a connection to the container-backed Postgres, and a
+// transaction that is always rolled back, so the order tests run in cannot matter.
 package testdb
 
 import (
@@ -26,8 +23,7 @@ import (
 const DSNEnv = "LEDGER_TEST_DSN"
 
 // DefaultDSN matches compose.test.yaml, on port 55432 so it cannot reach a
-// Postgres already running on this machine. A test holds cmd/pacioli's own copy
-// of the string against it.
+// Postgres already running on this machine.
 const DefaultDSN = "postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable"
 
 // testDBSuffix guards against pointing the suite at a database that matters.
@@ -47,9 +43,8 @@ func DSN() string {
 	return DefaultDSN
 }
 
-// Open returns the shared pool, connecting on first use and installing the
-// schema if it is not already there. A missing database fails the test rather
-// than skipping it.
+// Open returns the shared pool, connecting on first use and installing the schema
+// if it is not already there. A missing database fails the test.
 func Open(t *testing.T) *sql.DB {
 	t.Helper()
 
@@ -69,8 +64,7 @@ func Open(t *testing.T) *sql.DB {
 			openErr = err
 			return
 		}
-		// The container starts empty every run, and Apply is a no-op once
-		// another test package has been first.
+		// The container starts empty every run, and Apply is a no-op after the first.
 		if _, err := schema.Apply(context.Background(), db); err != nil {
 			db.Close()
 			openErr = err
@@ -89,8 +83,8 @@ func Open(t *testing.T) *sql.DB {
 	return shared
 }
 
-// Tx begins a transaction and rolls it back when the test ends. Whatever the
-// test writes is visible to the test and to nothing else, ever.
+// Tx begins a transaction and rolls it back when the test ends. What the test
+// writes is visible to the test and to nothing else, ever.
 func Tx(t *testing.T) *sql.Tx {
 	t.Helper()
 
@@ -108,11 +102,8 @@ func Tx(t *testing.T) *sql.Tx {
 }
 
 // Disposable hands a test a pool on a database of its own: created empty, schema
-// applied, dropped when the test ends. It is for a test that has to COMMIT,
-// which the shared database cannot take because postings are never truncated.
-//
-// The name goes into DDL, where a placeholder cannot, so it must be plain and
-// must end in _test.
+// applied, dropped when the test ends. It is for a test that has to COMMIT. The
+// name goes into DDL, so it must be plain and must end in _test.
 func Disposable(t *testing.T, name string) *sql.DB {
 	t.Helper()
 
@@ -120,16 +111,14 @@ func Disposable(t *testing.T, name string) *sql.DB {
 		t.Fatalf("%q is not a name this will create: lowercase, digits and underscores, ending in %s", name, testDBSuffix)
 	}
 
-	// The DDL runs on the shared pool: a database cannot be dropped from
-	// inside itself, and CREATE DATABASE cannot run inside a transaction.
+	// On the shared pool: a database cannot be dropped from inside itself.
 	admin := Open(t)
 	drop := func() {
 		if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + name + ` WITH (FORCE)`); err != nil {
 			t.Errorf("drop %s: %v", name, err)
 		}
 	}
-	// A run killed between the create and the drop would otherwise leave
-	// this failing forever.
+	// A run killed between the create and the drop would leave this failing forever.
 	drop()
 	if _, err := admin.Exec(`CREATE DATABASE ` + name); err != nil {
 		t.Fatalf("create %s: %v", name, err)
@@ -150,12 +139,10 @@ func Disposable(t *testing.T, name string) *sql.DB {
 	return db
 }
 
-// plainName is what may be pasted into DDL. There is no placeholder for an
-// identifier, so the safety is that nothing outside this shape is ever pasted.
+// plainName is what may be pasted into DDL, there being no placeholder for one.
 var plainName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,60}$`)
 
-// withDatabase points a connection string at another database on the same
-// server.
+// withDatabase points a connection string at another database on the same server.
 func withDatabase(t *testing.T, dsn, name string) string {
 	t.Helper()
 
