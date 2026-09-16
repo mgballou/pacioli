@@ -79,6 +79,20 @@ reasoning behind the rules below; read it before arguing with one.
   surprise a competent reader. Reasoning that runs to a paragraph belongs in
   `docs/DESIGN.md`.
 
+  The rule carries a number, because it drifts without one: non-test Go source
+  stays at or under 15 percent comment, per file and over the tree. Read it back
+  with
+
+  ```
+  for f in $(find . -name '*.go' ! -name '*_test.go' -not -path '*/.*/*' | sort); do
+      printf '%3d%%  %s\n' $(( $(grep -cE '^[[:space:]]*(//|/\*|\*)' "$f") * 100 / $(wc -l < "$f") )) "$f"
+  done
+  ```
+
+  `internal/docs/docs.go` reads 40 percent and stays there. It holds five lines
+  of code, and its package comment and the one line over `Home` are each what
+  this rule asks for.
+
 ## Adding a negative control
 
 A control declares a mutation and names the test that should catch it.
