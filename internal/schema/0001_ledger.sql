@@ -2,16 +2,12 @@
 -- Applied verbatim by internal/schema. There is no migration framework.
 
 
--- What blank means, written once and asked everywhere a person's words are
--- held. btrim() strips spaces and nothing else, so `btrim(x) <> ''` took a name
--- of one newline, one tab or one carriage return as a name.
+-- What blank means, asked everywhere a person's words are held.
 CREATE FUNCTION is_blank(s text) RETURNS boolean
     LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
     RETURN s !~ '[^[:space:]]';
 
--- The other half of the same rule. A control character is not something a
--- person reads or types, so a value carrying one anywhere is refused whole
--- rather than trimmed down to what is left.
+-- The other half of the same rule: a value carrying one anywhere is refused whole.
 CREATE FUNCTION has_control_character(s text) RETURNS boolean
     LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
     RETURN s ~ '[[:cntrl:]]';
@@ -26,10 +22,7 @@ CREATE TYPE account_kind AS ENUM (
 
 CREATE TABLE accounts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- Bounded as well as shaped: the code is a URL path segment on the way
-    -- back out, and a 100 kB one was. The shape is a closed set of characters,
-    -- so it already says what is_blank and has_control_character say below:
-    -- ^ and $ anchor the whole string here, and a trailing newline is refused.
+    -- Bounded as well as shaped: the code is a URL path segment on the way out.
     code       text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_.]{0,63}$'),
     name       text NOT NULL CHECK (NOT is_blank(name) AND NOT has_control_character(name)
                                     AND char_length(name) <= 100),
@@ -99,14 +92,9 @@ BEGIN
 END;
 $$;
 
--- One entry with legs still to check. Postgres has no deferred statement
--- trigger — CREATE CONSTRAINT TRIGGER takes FOR EACH ROW and nothing else — so
--- a deferred check hung straight off postings ran once per leg and summed every
--- leg each time. The legs name their transaction here instead, at most once,
--- and the deferred check hangs off this table.
---
--- Nothing here outlives the transaction that wrote it: the check deletes the row
--- it fired on, so legs added after a check queue another one.
+-- One entry with legs still to check, named at most once per entry, with the
+-- deferred check hung off this table. Nothing here outlives its transaction: the
+-- check deletes the row it fired on, so legs added after one queue another.
 CREATE TABLE balance_checks (
     transaction_id uuid PRIMARY KEY
 );
@@ -244,11 +232,8 @@ CREATE TRIGGER idempotency_keys_settle_once
     BEFORE UPDATE ON idempotency_keys
     FOR EACH ROW EXECUTE FUNCTION idempotency_record_is_final();
 
--- Balances are derived, never stored, and signed like a posting.
---
--- One aggregate per account, not one GROUP BY over the whole join: the numbers
--- are the same either way, and this shape is the one a LIMIT can stop early.
--- DESIGN.md 23.
+-- Balances are derived, never stored, and signed like a posting. One aggregate
+-- per account, which is the shape a LIMIT can stop early.
 CREATE VIEW account_balances AS
     SELECT a.id AS account_id,
            a.code,
