@@ -12,6 +12,8 @@ import (
 const (
 	codeUnbalanced   = "LB001"
 	codeAppendOnly   = "LB002"
+	codeUnsettledKey = "LB003"
+	codeSettledKey   = "LB004"
 	codeCheck        = "23514"
 	codeForeignKey   = "23503"
 	codeNotNullOrDup = "23505"
@@ -128,6 +130,93 @@ func TestAccountCodesAreUnique(t *testing.T) {
 	assertCode(t, err, codeNotNullOrDup)
 }
 
+func TestAnIdempotencyKeyIsTakenOnlyOnce(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedAccounts(t, tx)
+	txnID := settledTransaction(t, tx)
+
+	reserve(t, tx, "a-key-nobody-else-has", txnID)
+
+	_, err := tx.Exec(
+		`INSERT INTO idempotency_keys (key, request_hash, transaction_id)
+		 VALUES ('a-key-nobody-else-has', sha256('again'), $1)`, txnID)
+	assertCode(t, err, codeNotNullOrDup)
+}
+
+func TestAKeyWithNoTransactionCannotBeCommitted(t *testing.T) {
+	tx := testdb.Tx(t)
+
+	if _, err := tx.Exec(
+		`INSERT INTO idempotency_keys (key, request_hash)
+		 VALUES ('reserved-and-abandoned', sha256('body'))`,
+	); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+
+	_, err := tx.Exec(`SET CONSTRAINTS ALL IMMEDIATE`)
+	assertCode(t, err, codeUnsettledKey)
+}
+
+func TestAReservedKeyCanBeGivenUp(t *testing.T) {
+	tx := testdb.Tx(t)
+
+	if _, err := tx.Exec(
+		`INSERT INTO idempotency_keys (key, request_hash)
+		 VALUES ('reserved-then-released', sha256('body'))`,
+	); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM idempotency_keys WHERE key = 'reserved-then-released'`); err != nil {
+		t.Fatalf("give it up: %v", err)
+	}
+	mustSettle(t, tx)
+}
+
+func TestASettledKeyCannotBeRewritten(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedAccounts(t, tx)
+	first := settledTransaction(t, tx)
+	second := settledTransaction(t, tx)
+
+	reserve(t, tx, "settled-once-and-for-all", first)
+
+	_, err := tx.Exec(
+		`UPDATE idempotency_keys SET transaction_id = $1 WHERE key = 'settled-once-and-for-all'`,
+		second)
+	assertCode(t, err, codeSettledKey)
+}
+
+func TestTheRequestAKeyWasUsedForCannotBeRewritten(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedAccounts(t, tx)
+	txnID := settledTransaction(t, tx)
+
+	reserve(t, tx, "the-request-is-final", txnID)
+
+	_, err := tx.Exec(
+		`UPDATE idempotency_keys SET request_hash = sha256('a different body')
+		  WHERE key = 'the-request-is-final'`)
+	assertCode(t, err, codeSettledKey)
+}
+
+func TestAKeyTooShortToBeUnguessableIsRefused(t *testing.T) {
+	tx := testdb.Tx(t)
+
+	_, err := tx.Exec(
+		`INSERT INTO idempotency_keys (key, request_hash) VALUES ('1', sha256('body'))`)
+	assertCode(t, err, codeCheck)
+}
+
+func TestAKeyMustNameATransactionThatExists(t *testing.T) {
+	tx := testdb.Tx(t)
+
+	_, err := tx.Exec(
+		`INSERT INTO idempotency_keys (key, request_hash, transaction_id)
+		 VALUES ('names-a-transaction-that-is-not-there', sha256('body'),
+		         '99999999-9999-9999-9999-999999999999')`)
+	assertCode(t, err, codeForeignKey)
+}
+
 type leg struct {
 	account string
 	amount  int64
@@ -175,6 +264,39 @@ func postTransaction(t *testing.T, tx *sql.Tx, description string, legs ...leg) 
 		}
 	}
 	return txnID
+}
+
+func settledTransaction(t *testing.T, tx *sql.Tx) string {
+	t.Helper()
+
+	mustDefer(t, tx)
+	id := postTransaction(t, tx, "Customer deposit", leg{cash, 4500}, leg{customer, -4500})
+	mustSettle(t, tx)
+	return id
+}
+
+func reserve(t *testing.T, tx *sql.Tx, key, txnID string) {
+	t.Helper()
+
+	mustDefer(t, tx)
+	if _, err := tx.Exec(
+		`INSERT INTO idempotency_keys (key, request_hash) VALUES ($1, sha256('body'))`, key,
+	); err != nil {
+		t.Fatalf("reserve %s: %v", key, err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE idempotency_keys SET transaction_id = $2 WHERE key = $1`, key, txnID,
+	); err != nil {
+		t.Fatalf("settle %s: %v", key, err)
+	}
+}
+
+func mustDefer(t *testing.T, tx *sql.Tx) {
+	t.Helper()
+
+	if _, err := tx.Exec(`SET CONSTRAINTS ALL DEFERRED`); err != nil {
+		t.Fatalf("defer: %v", err)
+	}
 }
 
 // mustSettle forces the deferred checks to run now. Tests roll back rather than commit, so without it the constraint is never asked.

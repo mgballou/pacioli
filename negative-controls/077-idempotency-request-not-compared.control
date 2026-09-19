@@ -1,0 +1,13 @@
+# Without hashing the body, any request matches any key and a retry gets the first entry.
+
+title: every request fingerprints the same, so no two are ever different
+file: internal/ledgerhttp/transactions.go
+run: go test -count=1 -run TestTheSameKeyWithADifferentRequestIsRefused -v ./internal/ledgerhttp/
+--- before
+	sum := sha256.Sum256(canonical)
+	return ledger.Claim{Key: key, RequestHash: sum[:]}, nil
+--- after
+	// negative control: the request is not part of its own fingerprint
+	_ = canonical
+	sum := sha256.Sum256(nil)
+	return ledger.Claim{Key: key, RequestHash: sum[:]}, nil

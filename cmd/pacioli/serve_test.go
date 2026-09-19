@@ -308,7 +308,14 @@ func waitUntilRefused(t *testing.T, addr string) {
 func postJSON(t *testing.T, url string, wantStatus int, send string, into any) {
 	t.Helper()
 
-	res, err := http.Post(url, "application/json", strings.NewReader(send))
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(send))
+	if err != nil {
+		t.Fatalf("build the request for %s: %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "cmd-ledger-serve-mounts-the-write")
+
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post %s: %v", url, err)
 	}

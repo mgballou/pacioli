@@ -14,7 +14,7 @@ ADDR        ?= 127.0.0.1:8080
 # A different port for the demo, so it cannot collide with a running `make run`.
 DEMO_ADDR ?= 127.0.0.1:58080
 
-.PHONY: all build clean db-down db-psql db-reset db-up demo-serve fmt lint negative-controls run test vet
+.PHONY: all build clean db-down db-psql db-reset db-up demo-post demo-serve fmt lint negative-controls run test vet
 
 all: build vet lint test
 
@@ -29,6 +29,13 @@ test: db-up
 ## run: start the database, build, and serve the ledger on $(ADDR)
 run: db-up build
 	$(BIN_DIR)/$(BINARY) serve -addr $(ADDR)
+
+## demo-post: a transaction taken and one refused, with the balance either side
+demo-post:
+	@$(MAKE) --no-print-directory db-reset
+	@$(MAKE) --no-print-directory -s build
+	@tools/post-demo.sh $(BIN_DIR)/$(BINARY) $(DEMO_ADDR); status=$$?; \
+		$(MAKE) --no-print-directory db-reset; exit $$status
 
 ## demo-serve: the binary serving on a socket, then a clean exit on SIGINT
 demo-serve:

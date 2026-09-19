@@ -1,0 +1,12 @@
+# Without the primary key, requests that share one key each post their own transaction.
+
+title: the idempotency key is not unique, and every duplicate writes
+file: internal/schema/0001_ledger.sql
+run: go test -race -count=1 -run TestManyRequestsWithOneKeyAtOnceWriteOnce -v ./internal/ledgerhttp/
+--- before
+    key text PRIMARY KEY
+        CONSTRAINT idempotency_keys_key_shape CHECK (key ~ '^[[:graph:]]{16,255}$'),
+--- after
+    -- negative control: the key is no longer unique and nothing serializes
+    key text NOT NULL
+        CONSTRAINT idempotency_keys_key_shape CHECK (key ~ '^[[:graph:]]{16,255}$'),

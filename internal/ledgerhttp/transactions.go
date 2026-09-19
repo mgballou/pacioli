@@ -1,6 +1,7 @@
 package ledgerhttp
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,12 @@ import (
 
 // maxRequestBody bounds what will be read from a client body.
 const maxRequestBody = 1 << 20
+
+// The headers the idempotency contract is carried on.
+const (
+	keyHeader      = "Idempotency-Key"
+	replayedHeader = "Idempotent-Replayed"
+)
 
 // A postingBody is one leg, in a request or a response.
 type postingBody struct {
@@ -59,6 +66,16 @@ type unbalancedBody struct {
 }
 
 func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
+	// Checked before the body: a write that cannot be made safe to retry is not read.
+	key := r.Header.Get(keyHeader)
+	if key == "" {
+		s.write(w, r, http.StatusBadRequest, errorBody{
+			Error:     "this endpoint will not take a write it cannot make safe to retry",
+			Parameter: keyHeader,
+		})
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
 	dec := json.NewDecoder(r.Body)
@@ -89,24 +106,78 @@ func (s *server) postTransaction(w http.ResponseWriter, r *http.Request) {
 		e.Legs = append(e.Legs, ledger.Leg{Account: p.Account, AmountMinor: p.AmountMinor})
 	}
 
-	var id string
-	err := s.ledger.Write(r.Context(), func(tx *sql.Tx) error {
+	claim, err := claimOf(key, req)
+	if err != nil {
+		s.logf("POST %s: %v", r.URL.RequestURI(), err)
+		s.write(w, r, http.StatusInternalServerError, errorBody{Error: "internal error"})
+		return
+	}
+
+	// One transaction holds the reservation, the post and the read-back. A replay
+	// opens one too, because which it is only becomes known at the reservation.
+	var (
+		rec    ledger.Record
+		stored ledger.Entry
+	)
+	err = s.ledger.Write(r.Context(), func(tx *sql.Tx) error {
 		var err error
-		id, err = ledger.Post(r.Context(), tx, e)
+		rec, err = ledger.Once(r.Context(), tx, claim, func() (string, error) {
+			return ledger.Post(r.Context(), tx, e)
+		})
+		if err != nil || !rec.Replayed {
+			return err
+		}
+		stored, err = ledger.EntryOf(r.Context(), tx, rec.Transaction)
 		return err
 	})
 	if err != nil {
-		s.refuse(w, r, err, req)
+		s.refuse(w, r, err, req, key)
+		return
+	}
+
+	// A repeat gets the first answer, as the same 201, read back out of the ledger.
+	if rec.Replayed {
+		w.Header().Set(replayedHeader, "true")
+		s.write(w, r, http.StatusCreated, entryBody(rec.Transaction, stored))
 		return
 	}
 
 	// No Location header: nothing serves GET /v1/transactions/{id} yet.
 	s.write(w, r, http.StatusCreated, transactionBody{
-		Transaction: id,
+		Transaction: rec.Transaction,
 		Currency:    req.Currency,
 		Description: req.Description,
 		Postings:    req.Postings,
 	})
+}
+
+// claimOf fingerprints a request, so a key reused with a different one can be
+// told from a retry. The digest is over the decoded request re-encoded, so
+// whitespace and field order do not count.
+func claimOf(key string, req transactionRequest) (ledger.Claim, error) {
+	canonical, err := json.Marshal(req)
+	if err != nil {
+		return ledger.Claim{}, fmt.Errorf("fingerprint the request: %w", err)
+	}
+	sum := sha256.Sum256(canonical)
+	return ledger.Claim{Key: key, RequestHash: sum[:]}, nil
+}
+
+// entryBody builds the answer from what the ledger holds, legs in written order.
+func entryBody(transaction string, e ledger.Entry) transactionBody {
+	body := transactionBody{
+		Transaction: transaction,
+		Currency:    e.Currency,
+		Description: e.Description,
+		Postings:    make([]postingBody, 0, len(e.Legs)),
+	}
+	for _, leg := range e.Legs {
+		body.Postings = append(body.Postings, postingBody{
+			Account:     leg.Account,
+			AmountMinor: leg.AmountMinor,
+		})
+	}
+	return body
 }
 
 // unreadable answers a body that could not be read as a request. The ledger was
@@ -153,7 +224,7 @@ func unknownField(err error) string {
 
 // refuse turns the ledger's sentinel errors into a status. It switches on the
 // sentinel, never on the text of what Postgres said.
-func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req transactionRequest) {
+func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req transactionRequest, key string) {
 	// Which leg, where the refusal named one.
 	named := errorBody{}
 	var leg *ledger.LegError
@@ -163,6 +234,20 @@ func (s *server) refuse(w http.ResponseWriter, r *http.Request, err error, req t
 	}
 
 	switch {
+	case errors.Is(err, ledger.ErrKeyReused):
+		s.write(w, r, http.StatusConflict, errorBody{
+			Error:     "the idempotency key was used for a different request",
+			Parameter: keyHeader,
+			Value:     key,
+		})
+
+	case errors.Is(err, ledger.ErrBadKey):
+		s.write(w, r, http.StatusUnprocessableEntity, errorBody{
+			Error:     "the ledger will not hold that idempotency key",
+			Parameter: keyHeader,
+			Value:     key,
+		})
+
 	case errors.Is(err, ledger.ErrUnbalanced):
 		sum, legs := req.net()
 		s.write(w, r, http.StatusUnprocessableEntity, unbalancedBody{

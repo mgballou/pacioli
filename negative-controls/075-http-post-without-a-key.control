@@ -1,0 +1,17 @@
+# Without the header check, a keyless write reaches the database and gets a worse answer.
+
+title: the missing key is left for the database to notice
+file: internal/ledgerhttp/transactions.go
+run: make db-reset && go test -count=1 -run TestARequestWithNoIdempotencyKeyIsRefused -v ./internal/ledgerhttp/
+--- before
+	key := r.Header.Get(keyHeader)
+	if key == "" {
+		s.write(w, r, http.StatusBadRequest, errorBody{
+			Error:     "this endpoint will not take a write it cannot make safe to retry",
+			Parameter: keyHeader,
+		})
+		return
+	}
+--- after
+	// negative control: a write with no key goes to the ledger like any other
+	key := r.Header.Get(keyHeader)

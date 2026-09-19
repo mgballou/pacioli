@@ -1,0 +1,18 @@
+# Without the update, a key holds no result and a retry has no first answer to be given.
+
+title: the transaction a key created is never recorded against it
+file: internal/ledger/idempotency.go
+run: go test -count=1 -run TestTheSameKeyTwiceIsAnsweredWithTheFirstResultAndWritesNothing -v ./internal/ledgerhttp/
+--- before
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE idempotency_keys SET transaction_id = $2::uuid
+		  WHERE key = $1 AND transaction_id IS NULL`,
+		c.Key, id,
+	); err != nil {
+		if rbErr := rollbackToOnce(ctx, tx); rbErr != nil {
+			return Record{}, errors.Join(err, rbErr)
+		}
+		return Record{}, fmt.Errorf("record the result under the key: %w", err)
+	}
+--- after
+	// negative control: the key is taken and the result is not written down

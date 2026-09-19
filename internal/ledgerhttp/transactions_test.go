@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -408,10 +409,30 @@ func xactStatus(t *testing.T, xid string) string {
 	return status
 }
 
+// post mints a key prefixed with this package, so its seeds and internal/ledger's cannot wait on each other's open reservation.
 func post(t *testing.T, url, body string) (*http.Response, []byte) {
 	t.Helper()
 
-	res, err := http.Post(url, "application/json", strings.NewReader(body))
+	return postKeyed(t, url, mintKey(t), body)
+}
+
+func postKeyed(t *testing.T, url, key, body string) (*http.Response, []byte) {
+	t.Helper()
+
+	return postWith(t, url, body, func(r *http.Request) { r.Header.Set(keyHeader, key) })
+}
+
+func postWith(t *testing.T, url, body string, with func(*http.Request)) (*http.Response, []byte) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build the request for %s: %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	with(req)
+
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post %s: %v", url, err)
 	}
@@ -422,6 +443,19 @@ func post(t *testing.T, url, body string) (*http.Response, []byte) {
 		t.Fatalf("read %s: %v", url, err)
 	}
 	return res, got
+}
+
+const (
+	keyHeader      = "Idempotency-Key"
+	replayedHeader = "Idempotent-Replayed"
+)
+
+var keysMinted atomic.Int64
+
+func mintKey(t *testing.T) string {
+	t.Helper()
+
+	return fmt.Sprintf("ledgerhttp-%s-%d", t.Name(), keysMinted.Add(1))
 }
 
 func balanceOver(t *testing.T, srv *httptest.Server, code string) int64 {
