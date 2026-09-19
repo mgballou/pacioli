@@ -32,6 +32,21 @@ type Trial struct {
 // Balanced reports whether the two sides cancel.
 func (t Trial) Balanced() bool { return t.NetMinor == 0 }
 
+// ErrUnknownKind means a filter named something that is not an account_kind.
+var ErrUnknownKind = errors.New("no such account kind")
+
+// An AccountFilter narrows a list of accounts. Its zero value is every account:
+// an empty field means the caller did not ask, and no account holds a blank one.
+type AccountFilter struct {
+	// Currency is matched exactly and checked against nothing. The set is
+	// open, so a code no account holds is an empty answer, not a refusal.
+	Currency string
+
+	// Kind is one of the account_kind values, a closed set, so a value
+	// outside it is ErrUnknownKind. The enum in Postgres is what checks.
+	Kind string
+}
+
 // balanceColumns reads the account_balances view, so there is one definition of
 // an account balance.
 const balanceColumns = `code, name, kind::text, currency, balance_minor, posting_count`
@@ -52,10 +67,20 @@ func BalanceOf(ctx context.Context, tx *sql.Tx, code string) (Balance, error) {
 	return b, nil
 }
 
-// Balances returns every account, in code order, including the ones nothing has
-// been posted to.
-func Balances(ctx context.Context, tx *sql.Tx) ([]Balance, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT `+balanceColumns+` FROM account_balances ORDER BY code`)
+// Balances returns the accounts f matches, in code order, including the ones
+// nothing has been posted to. Every filter is always bound and an unasked one
+// reads as NULL, so the statement is fixed rather than assembled from strings.
+func Balances(ctx context.Context, tx *sql.Tx, f AccountFilter) ([]Balance, error) {
+	if err := checkKind(ctx, tx, f.Kind); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT `+balanceColumns+`
+		   FROM account_balances
+		  WHERE (nullif($1::text, '') IS NULL OR currency = $1::text)
+		    AND (nullif($2::text, '') IS NULL OR kind::text = $2::text)
+		  ORDER BY code`, f.Currency, f.Kind)
 	if err != nil {
 		return nil, fmt.Errorf("balances: %w", err)
 	}
@@ -73,6 +98,25 @@ func Balances(ctx context.Context, tx *sql.Tx) ([]Balance, error) {
 		return nil, fmt.Errorf("balances: %w", err)
 	}
 	return out, nil
+}
+
+// checkKind asks before it filters, because casting a bad kind would raise and
+// leave the caller's transaction aborted for every read after it. It asks
+// enum_range, so a kind added to the schema is accepted with no edit here.
+func checkKind(ctx context.Context, tx *sql.Tx, kind string) error {
+	if kind == "" {
+		return nil
+	}
+	var known bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT $1::text = ANY (enum_range(NULL::account_kind)::text[])`, kind,
+	).Scan(&known); err != nil {
+		return fmt.Errorf("account kinds: %w", err)
+	}
+	if !known {
+		return fmt.Errorf("%w %q", ErrUnknownKind, kind)
+	}
+	return nil
 }
 
 // TrialBalance returns the side totals for every currency the chart holds, in

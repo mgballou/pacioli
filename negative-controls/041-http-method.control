@@ -1,0 +1,9 @@
+# Without the method in the pattern, a POST reaches a read handler and is answered 200.
+
+title: a write method reaches the read handler and is answered
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestAWriteMethodIsRefused -v ./internal/ledgerhttp/
+--- before
+	mux.HandleFunc("GET /v1/accounts/{code}", s.balance)
+--- after
+	mux.HandleFunc("/v1/accounts/{code}", s.balance)

@@ -1,0 +1,9 @@
+# Without the currency predicate, the list ignores the filter and answers the wrong rows.
+
+title: the currency filter is bound and then ignored
+file: internal/ledger/balance.go
+run: go test -count=1 -run TestTheListNarrowsToACurrency -v ./internal/ledgerhttp/
+--- before
+		  WHERE (nullif($1::text, '') IS NULL OR currency = $1::text)
+--- after
+		  WHERE (nullif($1::text, '') IS NULL OR true)

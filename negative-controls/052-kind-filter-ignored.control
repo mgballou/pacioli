@@ -1,0 +1,9 @@
+# Without the kind predicate, the list ignores the filter and answers the wrong rows.
+
+title: the kind filter is bound and then ignored
+file: internal/ledger/balance.go
+run: go test -count=1 -run TestTheListNarrowsToAKind -v ./internal/ledgerhttp/
+--- before
+		    AND (nullif($2::text, '') IS NULL OR kind::text = $2::text)
+--- after
+		    AND (nullif($2::text, '') IS NULL OR true)

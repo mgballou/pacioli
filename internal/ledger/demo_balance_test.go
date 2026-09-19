@@ -46,7 +46,7 @@ func TestDemoBalanceReads(t *testing.T) {
 func report(t *testing.T, ctx context.Context, tx *sql.Tx) {
 	t.Helper()
 
-	balances, err := ledger.Balances(ctx, tx)
+	balances, err := ledger.Balances(ctx, tx, ledger.AccountFilter{})
 	if err != nil {
 		t.Fatalf("balances: %v", err)
 	}

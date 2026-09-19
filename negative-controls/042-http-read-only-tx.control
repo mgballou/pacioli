@@ -1,0 +1,9 @@
+# Without READ ONLY, the transaction a request reads on can write to the ledger.
+
+title: the transaction a request reads on is allowed to write
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestPoolLendsAReadOnlyTransaction -v ./internal/ledgerhttp/
+--- before
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+--- after
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})

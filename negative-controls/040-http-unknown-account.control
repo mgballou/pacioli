@@ -1,0 +1,11 @@
+# Without the 404, a client that mistypes a code is told its request worked.
+
+title: an unknown account code is answered 200
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestAnUnknownAccountIs404 -v ./internal/ledgerhttp/
+--- before
+		named.Error = "no such account"
+		s.write(w, r, http.StatusNotFound, named)
+--- after
+		named.Error = "no such account"
+		s.write(w, r, http.StatusOK, named)

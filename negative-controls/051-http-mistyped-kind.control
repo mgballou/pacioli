@@ -1,0 +1,11 @@
+# Without the kind check, a mistyped kind is answered 200 with an empty list.
+
+title: a mistyped account kind is answered 200 with an empty list
+file: internal/ledger/balance.go
+run: go test -count=1 -run TestAMistypedKindIsRefusedAndNotAnsweredEmpty -v ./internal/ledgerhttp/
+--- before
+	if err := checkKind(ctx, tx, f.Kind); err != nil {
+		return nil, err
+	}
+
+--- after
