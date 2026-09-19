@@ -1,0 +1,12 @@
+# Without the savepoint, a refused open aborts the whole transaction the caller was in.
+
+title: a refused open takes the caller's transaction down with it
+file: internal/ledger/accounts.go
+run: go test -count=1 -run TestARefusedOpenLeavesTheTransactionUsable -v ./internal/ledger/
+--- before
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+openSavepoint); err != nil {
+		return fmt.Errorf("savepoint: %w", err)
+	}
+--- after
+	// negative control: no savepoint, so a refused open aborts the caller's
+	// transaction and there is nothing to roll back to

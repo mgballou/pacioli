@@ -1,0 +1,9 @@
+# Without the route, the handler is never served and POST /v1/accounts is answered 405.
+
+title: the account endpoint exists and nothing serves it
+file: internal/ledgerhttp/ledgerhttp.go
+run: make db-reset && go test -count=1 -run TestAnAccountIsOpenedOverHTTPAndIsThenReadable -v ./internal/ledgerhttp/
+--- before
+	mux.HandleFunc("POST /v1/accounts", s.openAccount)
+--- after
+	// negative control: the handler is written and the mux does not know
