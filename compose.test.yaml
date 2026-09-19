@@ -1,0 +1,54 @@
+# The test database. The ledger's own Postgres is in compose.yaml.
+#
+# The Makefile targets this file with -f, so `make test` never touches the app
+# stack. Ephemeral on purpose: the data directory is a tmpfs, so the container
+# starts empty every time and there is no volume to go stale between branches.
+# Tests run against a real Postgres, never a mock and never a shared
+# long-lived instance.
+#
+# Port 55432, not 5432, so it cannot collide with a Postgres already running on
+# this machine — and so a test can never accidentally reach one.
+#
+# Its own compose project name, so `make db-down --remove-orphans` cannot
+# reach into the app stack next door.
+
+name: pacioli-test
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: pacioli-test-db
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger_test
+      # The database is thrown away on every `make db-down`, so trust auth on
+      # the loopback socket costs nothing and skips a round trip per connection.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      # Postgres 18 moved the data directory into a version subdirectory, so
+      # the mount goes one level up from the old /var/lib/postgresql/data. The
+      # sticky world-writable mode lets the entrypoint create that subdirectory
+      # after it drops to the postgres user; initdb then locks the data
+      # directory itself down to 0700.
+      - /var/lib/postgresql:mode=1777
+    command:
+      # Durability buys nothing for a database that is deleted after the test
+      # run, and turning it off makes the suite noticeably faster.
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - full_page_writes=off
+      - -c
+      - synchronous_commit=off
+    healthcheck:
+      # `make db-up` uses --wait, which blocks until this reports healthy, so a
+      # test never races the server's startup.
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
