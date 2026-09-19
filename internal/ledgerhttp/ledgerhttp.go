@@ -1,9 +1,9 @@
-// Package ledgerhttp serves the ledger over HTTP: accounts, balances and the
-// trial balance.
+// Package ledgerhttp serves the ledger over HTTP: accounts, balances, the trial
+// balance, and the write that posts a transaction.
 //
-// Every read runs on a transaction opened READ ONLY, so Postgres refuses a write
-// through it. The wire types are this package's own, so renaming a domain field
-// breaks a compile rather than a published API.
+// A read runs on a transaction opened READ ONLY. A write runs on its own, and
+// commits only if the handler got through. The wire types are this package's
+// own, so renaming a domain field breaks a compile rather than a published API.
 package ledgerhttp
 
 import (
@@ -28,6 +28,18 @@ type Reader interface {
 	Read(ctx context.Context, f func(tx *sql.Tx) error) error
 }
 
+// A Writer lends a change one transaction and decides its fate: committed if f
+// returns nil, rolled back if it returns anything else.
+type Writer interface {
+	Write(ctx context.Context, f func(tx *sql.Tx) error) error
+}
+
+// A Store is both, and it is what Handler is given.
+type Store interface {
+	Reader
+	Writer
+}
+
 // Pool works through a connection pool, one transaction per call, so a response
 // built from two statements is built from one snapshot of the ledger.
 type Pool struct{ DB *sql.DB }
@@ -43,20 +55,40 @@ func (p Pool) Read(ctx context.Context, f func(tx *sql.Tx) error) error {
 	return f(tx)
 }
 
-// Handler returns the ledger's HTTP surface over the reader r lends transactions
+// Write implements Writer. Both ways out are written out rather than deferred,
+// so exactly one of Commit and Rollback is reached on every path.
+func (p Pool) Write(ctx context.Context, f func(tx *sql.Tx) error) error {
+	tx, err := p.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin the write: %w", err)
+	}
+	if err := f(tx); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			return errors.Join(err, fmt.Errorf("roll back the write: %w", rbErr))
+		}
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit the write: %w", err)
+	}
+	return nil
+}
+
+// Handler returns the ledger's HTTP surface over the store st lends transactions
 // on. errorLog receives what a 500 does not tell the client; nil means
 // log.Default().
-func Handler(r Reader, errorLog *log.Logger) http.Handler {
-	s := &server{ledger: r, errorLog: errorLog}
+func Handler(st Store, errorLog *log.Logger) http.Handler {
+	s := &server{ledger: st, errorLog: errorLog}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/accounts", s.accounts)
 	mux.HandleFunc("GET /v1/accounts/{code}", s.balance)
 	mux.HandleFunc("GET /v1/trial-balance", s.trial)
+	mux.HandleFunc("POST /v1/transactions", s.postTransaction)
 	return mux
 }
 
 type server struct {
-	ledger   Reader
+	ledger   Store
 	errorLog *log.Logger
 }
 

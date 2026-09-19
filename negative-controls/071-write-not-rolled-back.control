@@ -1,0 +1,13 @@
+# Without the rollback, a refused write keeps whatever the transaction had in flight.
+
+title: a write that was refused is committed instead of rolled back
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestPoolRollsBackAWriteThatFailed -v ./internal/ledgerhttp/
+--- before
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			return errors.Join(err, fmt.Errorf("roll back the write: %w", rbErr))
+		}
+--- after
+		if rbErr := tx.Commit(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			return errors.Join(err, fmt.Errorf("roll back the write: %w", rbErr))
+		}

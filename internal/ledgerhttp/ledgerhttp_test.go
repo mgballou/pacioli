@@ -290,7 +290,7 @@ func TestAFaultIsA500AndTellsTheClientNothing(t *testing.T) {
 	boom := errors.New("the database fell over")
 	var logged bytes.Buffer
 
-	h := ledgerhttp.Handler(readerFunc(func(context.Context, func(*sql.Tx) error) error {
+	h := ledgerhttp.Handler(storeFunc(func(context.Context, func(*sql.Tx) error) error {
 		return boom
 	}), log.New(&logged, "", 0))
 	srv := httptest.NewServer(h)
@@ -340,23 +340,34 @@ func TestPoolFinishesTheTransactionItLent(t *testing.T) {
 	}
 }
 
-// readerFunc lends the test's own transaction to every read and never commits: postings are append-only, so a committed row would move every other test's counts.
-type readerFunc func(ctx context.Context, f func(*sql.Tx) error) error
+// txStore lends the test's own transaction to every read and write and never commits: postings are append-only, so a committed row would move every other test's counts.
+type txStore struct{ tx *sql.Tx }
 
-func (r readerFunc) Read(ctx context.Context, f func(*sql.Tx) error) error { return r(ctx, f) }
+func (s txStore) Read(_ context.Context, f func(*sql.Tx) error) error  { return f(s.tx) }
+func (s txStore) Write(_ context.Context, f func(*sql.Tx) error) error { return f(s.tx) }
 
-// serve uses one transaction and never two: every seed writes the same account codes and code is UNIQUE, so a second transaction would block until the test times out.
+type storeFunc func(ctx context.Context, f func(*sql.Tx) error) error
+
+func (s storeFunc) Read(ctx context.Context, f func(*sql.Tx) error) error  { return s(ctx, f) }
+func (s storeFunc) Write(ctx context.Context, f func(*sql.Tx) error) error { return s(ctx, f) }
+
 func serve(t *testing.T, seed func(*testing.T, *sql.Tx)) *httptest.Server {
+	t.Helper()
+
+	srv, _ := serveTx(t, seed)
+	return srv
+}
+
+// serveTx uses one transaction and never two: every seed writes the same account codes and code is UNIQUE, so a second transaction would block until the test times out.
+func serveTx(t *testing.T, seed func(*testing.T, *sql.Tx)) (*httptest.Server, *sql.Tx) {
 	t.Helper()
 
 	tx := testdb.Tx(t)
 	seed(t, tx)
 
-	srv := httptest.NewServer(ledgerhttp.Handler(readerFunc(
-		func(_ context.Context, f func(*sql.Tx) error) error { return f(tx) },
-	), log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(ledgerhttp.Handler(txStore{tx}, log.New(io.Discard, "", 0)))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, tx
 }
 
 func seeded(t *testing.T, tx *sql.Tx) {

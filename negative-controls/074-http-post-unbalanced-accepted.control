@@ -1,0 +1,14 @@
+# Without the schema's balance check, the endpoint accepts entries that do not balance.
+
+title: the schema's balance check is gone and the endpoint accepts anything
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestAnUnbalancedTransactionIsRefusedAndNothingMoves -v ./internal/ledgerhttp/
+--- before
+    IF net <> 0 THEN
+        RAISE EXCEPTION 'transaction % does not balance: % postings net to % (want 0)',
+            txn_id, legs, net
+            USING ERRCODE = 'LB001',
+                  HINT = 'Debits are positive, credits negative; the sides must cancel.';
+    END IF;
+--- after
+    -- negative control: the balance check is gone and the ledger takes anything

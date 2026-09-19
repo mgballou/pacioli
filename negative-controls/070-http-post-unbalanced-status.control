@@ -1,0 +1,13 @@
+# Without the 422, a refused entry is answered 201 and the client thinks money moved.
+
+title: an unbalanced transaction is refused by the ledger and answered 201 anyway
+file: internal/ledgerhttp/transactions.go
+run: go test -count=1 -run TestAnUnbalancedTransactionIsRefusedAndNothingMoves -v ./internal/ledgerhttp/
+--- before
+	case errors.Is(err, ledger.ErrUnbalanced):
+		sum, legs := req.net()
+		s.write(w, r, http.StatusUnprocessableEntity, unbalancedBody{
+--- after
+	case errors.Is(err, ledger.ErrUnbalanced):
+		sum, legs := req.net()
+		s.write(w, r, http.StatusCreated, unbalancedBody{

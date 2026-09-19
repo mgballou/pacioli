@@ -1,0 +1,15 @@
+# Without the settle, an unbalanced entry is refused at COMMIT or not at all.
+
+title: the balance check is left deferred, so nothing is refused before COMMIT
+file: internal/ledger/ledger.go
+run: go test -count=1 -run TestAnUnbalancedTransactionIsRefusedAndNothingMoves -v ./internal/ledgerhttp/
+--- before
+	// Ask now, not at COMMIT: deferred means the legs may arrive across statements.
+	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` IMMEDIATE`); err != nil {
+		return "", classify(err, -1, Leg{})
+	}
+	if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS `+balanceConstraints+` DEFERRED`); err != nil {
+		return "", fmt.Errorf("re-defer the balance check: %w", err)
+	}
+--- after
+	// negative control: the check is left deferred and nobody asks it

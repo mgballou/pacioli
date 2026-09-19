@@ -1,8 +1,6 @@
 package ledgerhttp_test
 
 import (
-	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,9 +19,7 @@ func TestDemoReadSurface(t *testing.T) {
 	tx := testdb.Tx(t)
 	seeded(t, tx)
 
-	srv := httptest.NewServer(ledgerhttp.Handler(readerFunc(
-		func(_ context.Context, f func(*sql.Tx) error) error { return f(tx) },
-	), log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(ledgerhttp.Handler(txStore{tx}, log.New(io.Discard, "", 0)))
 	defer srv.Close()
 
 	fmt.Println("\nCHART   four GBP accounts, one deposit of 45.00 less a 1.50 fee")
@@ -51,9 +47,7 @@ func TestDemoAccountList(t *testing.T) {
 	tx := testdb.Tx(t)
 	seededWithUSD(t, tx)
 
-	srv := httptest.NewServer(ledgerhttp.Handler(readerFunc(
-		func(_ context.Context, f func(*sql.Tx) error) error { return f(tx) },
-	), log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(ledgerhttp.Handler(txStore{tx}, log.New(io.Discard, "", 0)))
 	defer srv.Close()
 
 	fmt.Println("\nCHART   four GBP accounts, plus one USD account nothing has been posted to")
