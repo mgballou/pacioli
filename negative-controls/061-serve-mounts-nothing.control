@@ -1,0 +1,9 @@
+# Without the mounted mux, the server starts, answers every route 404, and looks healthy.
+
+title: the read surface is never mounted and the server answers from an empty mux
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestServeMountsTheLedgerReadSurface -v ./cmd/pacioli/
+--- before
+		Handler:           h,
+--- after
+		Handler:           nil,

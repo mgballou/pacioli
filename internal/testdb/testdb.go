@@ -23,9 +23,10 @@ import (
 // DSNEnv names the environment variable that overrides the compose defaults.
 const DSNEnv = "LEDGER_TEST_DSN"
 
-// defaultDSN matches compose.test.yaml, on port 55432 so it cannot reach a
-// Postgres already running on this machine.
-const defaultDSN = "postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable"
+// DefaultDSN matches compose.test.yaml, on port 55432 so it cannot reach a
+// Postgres already running on this machine. It is exported so a test can hold
+// cmd/pacioli's own copy of the string against it.
+const DefaultDSN = "postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable"
 
 // testDBSuffix guards against pointing the suite at a database that matters.
 const testDBSuffix = "_test"
@@ -41,7 +42,7 @@ func DSN() string {
 	if dsn := os.Getenv(DSNEnv); dsn != "" {
 		return dsn
 	}
-	return defaultDSN
+	return DefaultDSN
 }
 
 // Open returns the shared pool, connecting on first use and installing the

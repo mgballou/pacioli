@@ -1,0 +1,11 @@
+# Without the drain, a signal cuts an in-flight request and the client cannot tell why.
+
+title: the server is closed on the signal instead of drained
+file: cmd/pacioli/serve.go
+run: go test -count=1 -run TestServeFinishesAnInFlightRequestAfterTheSignal -v ./cmd/pacioli/
+--- before
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainGrace)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+--- after
+	return srv.Close()
