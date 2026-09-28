@@ -72,3 +72,18 @@ jobs:
       - name: stop the database
         if: always()
         run: make db-down
+
+  compose:
+    name: the README's compose path, from a clean state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The script reads its curl out of README.md and fails if the README stops
+      # showing either command, so an edit to one has to carry the other.
+      - name: docker compose up, then curl the trial balance
+        run: make compose-smoke
+
+      - name: take the stack down
+        if: always()
+        run: docker compose -p pacioli-smoke down --volumes --remove-orphans

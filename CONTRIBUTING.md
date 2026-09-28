@@ -20,6 +20,7 @@ make fmt                 # fail if gofmt would rewrite any file
 make negative-controls   # every declared mutation, green before and red after
 make dist                # the binary for linux and darwin, amd64 and arm64, in dist/
 make image               # the container image, labeled with the version and commit
+make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
 
 The test database is Postgres 18 on `127.0.0.1:55432`, not 5432, so it cannot
