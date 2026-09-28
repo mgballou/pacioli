@@ -7,6 +7,10 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 LDFLAGS     := -X main.version=$(VERSION)
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@2025.1.1
 COMPOSE     := docker compose -f compose.test.yaml
+DIST_DIR    := dist
+TARGETS     := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+IMAGE       ?= pacioli-ledger
+REVISION    ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 
 # Loopback only, so `make run` cannot expose the lab database to the network.
 ADDR        ?= 127.0.0.1:8080
@@ -14,13 +18,33 @@ ADDR        ?= 127.0.0.1:8080
 # A different port for the demo, so it cannot collide with a running `make run`.
 DEMO_ADDR ?= 127.0.0.1:58080
 
-.PHONY: all build clean db-down db-psql db-reset db-up demo demo-idempotency demo-post demo-serve fmt lint negative-controls run test vet
+.PHONY: all build clean db-down db-psql db-reset db-up demo demo-idempotency demo-post demo-serve dist fmt image lint negative-controls run test vet
 
 all: build vet lint test
 
 ## build: compile the binary into bin/, stamped with the git version
 build:
 	go build -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BINARY) $(CMD)
+
+## dist: cross-compile a stamped binary per release target into dist/, with checksums
+dist:
+	rm -rf $(DIST_DIR)
+	@for t in $(TARGETS); do \
+		os=$${t%/*}; arch=$${t#*/}; out=$(DIST_DIR)/$(BINARY)-$(VERSION)-$$os-$$arch; \
+		echo "$$out"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' -o $$out $(CMD) || exit 1; \
+	done
+	cd $(DIST_DIR) && shasum -a 256 $(BINARY)-* > SHA256SUMS
+
+## image: build the container image as $(IMAGE):$(VERSION), labeled with the version and commit
+image:
+	docker build \
+		--build-arg VERSION=$(VERSION) \
+		--label org.opencontainers.image.version=$(VERSION) \
+		--label org.opencontainers.image.revision=$(REVISION) \
+		--label org.opencontainers.image.source=https://github.com/mgballou/pacioli \
+		--label org.opencontainers.image.licenses=MIT \
+		-t $(IMAGE):$(VERSION) .
 
 ## test: run every test with the race detector enabled, against a live database
 test: db-up
@@ -98,4 +122,4 @@ fmt:
 
 ## clean: remove build output and the test database
 clean: db-down
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) $(DIST_DIR)
