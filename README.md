@@ -390,7 +390,9 @@ mutation and red after. Green after names a test that proves nothing. Red before
 names a broken setup reading as a working guard. Both fail the run.
 
 CI runs what a laptop runs, and nothing else: `fmt`, `build`, `vet`, `lint` and `test`
-in one job, `make negative-controls` in a second.
+in one job, `make negative-controls` in a second, and `make compose-smoke` in a
+third. That one runs the two commands at the top of this page with no containers
+and no volume, and holds the ledger to an empty trial balance.
 
 ## License
 

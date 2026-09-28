@@ -18,6 +18,7 @@ make db-reset            # drop the test database and start it again
 make db-down             # stop it and delete everything in it
 make fmt                 # fail if gofmt would rewrite any file
 make negative-controls   # every declared mutation, green before and red after
+make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
 
 The test database is Postgres 18 on `127.0.0.1:55432`, not 5432, so it cannot
