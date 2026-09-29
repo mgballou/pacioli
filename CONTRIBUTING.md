@@ -2,28 +2,24 @@
 
 ## Getting set up
 
-Needs Go 1.26 and a container runtime, Docker or OrbStack. Everything else is the
-Makefile.
+Install Go 1.26 and Docker or OrbStack. From the repository root, run the full
+local check:
 
 ```
-make all                 # build, vet, staticcheck, race tests
-make test                # race tests only; brings the database up itself
-make run                 # database up, build, serve on $(ADDR) — 127.0.0.1:8080
-make demo                # the ledger working, in seven steps over HTTP
-make demo-post           # a transaction taken and one refused, balances either side
-make demo-idempotency    # one key sent twice, then sixteen of it at once
-make demo-serve          # the binary on a socket, four exchanges, a clean exit
-make db-up               # start the test database and block until it answers
-make db-reset            # drop the test database and start it again
-make db-down             # stop it and delete everything in it
-make fmt                 # fail if gofmt would rewrite any file
-make negative-controls   # every declared mutation, green before and red after
-make compose-smoke       # the README's compose path from nothing, to an empty trial
+make all
 ```
 
-The test database is Postgres 18 on `127.0.0.1:55432`, not 5432, so it cannot
-reach a server already running on the machine. Its data directory is a tmpfs, so
-it starts empty every time.
+`make all` builds the binary, runs `go vet` and Staticcheck, then runs every test
+with the race detector. The tests start Postgres 18 from `compose.test.yaml` on
+`127.0.0.1:55432`; its data directory is a tmpfs and starts empty.
+
+Tests connect with `LEDGER_TEST_DSN`, which defaults to
+`postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
+`LEDGER_TEST_DSN` to a connection string for another disposable database when
+needed. Its database name must end in `_test`.
+
+Run `make db-down` to stop and remove the test database. The Makefile lists the
+other available commands.
 
 `make all` has to pass before a change is finished. `docs/DESIGN.md` gives the
 reasoning behind the rules below; read it before arguing with one.

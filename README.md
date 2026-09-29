@@ -363,18 +363,20 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 
 ## Running the tests
 
-```
-make all      # build, vet, staticcheck, race tests
-make test     # race tests only; starts the database itself
-make db-down  # stop the test database and delete everything in it
-```
+Install Go 1.26 and Docker or OrbStack. From the repository root, run:
 
-Needs Go 1.26 and a container runtime. Tests run against real Postgres and never
-a mock. Each test gets a transaction that is rolled back when it ends, so order
-cannot matter. See `internal/testdb`.
+    make all
 
-The test database is Postgres 18 on `127.0.0.1:55432`, described in
-`compose.test.yaml`. Its data directory is a tmpfs, so it starts empty every run.
+This builds the binary, runs `go vet` and Staticcheck, then runs every test with
+the race detector. The tests start Postgres 18 from `compose.test.yaml` on
+`127.0.0.1:55432`; its data directory is a tmpfs and starts empty.
+
+Tests connect with `LEDGER_TEST_DSN`, which defaults to
+`postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
+`LEDGER_TEST_DSN` to a connection string for another disposable database when
+needed. Its database name must end in `_test`.
+
+Run `make db-down` to stop and remove the test database.
 
 ## Proving the tests can fail
 
