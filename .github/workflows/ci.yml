@@ -1,14 +1,36 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  gate:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.base.outputs.run }}
+    steps:
+      - id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          behind=$(gh api "repos/${{ github.repository }}/compare/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}" --jq .behind_by)
+          if [ "$behind" = "0" ]; then echo "run=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::This branch is $behind commits behind ${{ github.base_ref }}. Update it to run CI."; echo "run=false" >> "$GITHUB_OUTPUT"; fi
+
   check:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: build, vet, staticcheck, race tests
     runs-on: ubuntu-latest
     steps:
@@ -52,6 +74,8 @@ jobs:
         run: make db-down
 
   controls:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: every declared negative control goes red
     runs-on: ubuntu-latest
     steps:
@@ -72,6 +96,8 @@ jobs:
         run: make db-down
 
   compose:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: the README's compose path, from a clean state
     runs-on: ubuntu-latest
     steps:
