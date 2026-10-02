@@ -367,9 +367,12 @@ Install Go 1.26 and Docker or OrbStack. From the repository root, run:
 
     make all
 
-This builds the binary, runs `go vet` and Staticcheck, then runs every test with
-the race detector. The tests start Postgres 18 from `compose.test.yaml` on
-`127.0.0.1:55432`; its data directory is a tmpfs and starts empty.
+This builds the binary and runs `go vet` and Staticcheck. It then starts Postgres
+18 from `compose.test.yaml` on `127.0.0.1:55432` and runs every test against it
+with the race detector. Its data directory is a tmpfs and starts empty.
+
+Tests run against real Postgres and never a mock. Each test gets a transaction
+that is rolled back when it ends, so order cannot matter. See `internal/testdb`.
 
 Tests connect with `LEDGER_TEST_DSN`, which defaults to
 `postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
