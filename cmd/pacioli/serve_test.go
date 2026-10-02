@@ -294,7 +294,7 @@ func listen(t *testing.T) net.Listener {
 // quiet discards rather than writing to t.Log, because serveOn logs from a goroutine that can outlive the test.
 func quiet() *log.Logger { return log.New(io.Discard, "", 0) }
 
-func TestIsConnectionRefused(t *testing.T) {
+func TestTheDrainWaitTakesOnlyARefusalAsAClosedListener(t *testing.T) {
 	refused := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 	if !isConnectionRefused(refused) {
 		t.Fatal("a connection-refused dial error was not recognized")
@@ -325,7 +325,7 @@ func waitUntilRefused(t *testing.T, addr string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if lastErr != nil {
-		t.Fatalf("the listener was still accepting connections five seconds after the signal; last dial error: %v", lastErr)
+		t.Fatalf("the listener did not refuse a connection within five seconds of the signal; last dial error: %v", lastErr)
 	}
 	t.Fatal("the listener was still accepting connections five seconds after the signal")
 }
