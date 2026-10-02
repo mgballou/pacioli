@@ -116,7 +116,7 @@ suite on the tagged commit, then `make dist` and `make image` with the tag as
 `VERSION`. It pushes the image to `ghcr.io/mgballou/pacioli:<tag>` and attaches
 the binaries and `SHA256SUMS` to a GitHub release for the tag. No other push
 publishes anything. The image name is the `IMAGE` variable at the top of the
-workflow.
+workflow. The runner is amd64, so the image is linux/amd64 only.
 
 ## Traps
 
