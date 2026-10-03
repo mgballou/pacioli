@@ -18,6 +18,7 @@ jobs:
     # Only a pull request can be a draft or behind its base. A workflow_call
     # from a tag push has neither, and always runs the suite.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,6 +38,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: build, vet, staticcheck, race tests
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +84,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: every declared negative control goes red
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +107,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: the README's compose path, from a clean state
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

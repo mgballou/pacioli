@@ -16,12 +16,20 @@ env:
 permissions:
   contents: read
 
+# ci.yml, called below, groups by workflow and ref; this group differs so the
+# two do not wait on each other. A tag push is never a pull request, so a
+# publish in flight is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
   publish:
     needs: ci
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     permissions:
       contents: write
