@@ -1,0 +1,68 @@
+# .github/workflows/release.yml
+#
+# Runs only when a tag starting with `v` is pushed. It runs the full CI suite on
+# the tagged commit, builds the binaries and the image stamped with the tag, and
+# publishes nothing unless every step before the push succeeded.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  # Where the image goes. The tag is appended, as `$IMAGE:v0.1.0`.
+  IMAGE: ghcr.io/mgballou/pacioli
+
+permissions:
+  contents: read
+
+# ci.yml, called below, groups by workflow and ref; this group differs so the
+# two do not wait on each other. A tag push is never a pull request, so a
+# publish in flight is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the binaries
+        run: make dist VERSION="$VERSION"
+
+      - name: Build the image
+        run: make image IMAGE="$IMAGE" VERSION="$VERSION" REVISION="$GITHUB_SHA"
+
+      - name: Check the image reports the tag
+        run: test "$(docker run --rm "$IMAGE:$VERSION" version)" = "$VERSION"
+
+      - name: Push the image
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login "${IMAGE%%/*}" -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE:$VERSION"
+
+      - name: Attach the binaries to a GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --verify-tag --title "$VERSION" --generate-notes
