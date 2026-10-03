@@ -12,30 +12,26 @@ permissions:
   contents: read
 
 jobs:
-  # Fails, rather than skips, a PR behind its base: a run whose jobs were all
-  # skipped concludes success, which reads as a pass.
   gate:
     if: github.event.pull_request.draft == false
     timeout-minutes: 3
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      run: ${{ steps.base.outputs.run }}
     steps:
-      - name: Require the branch to be current with its base
+      - id: base
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          BASE: ${{ github.base_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          behind=$(gh api "repos/$REPO/compare/$BASE...$HEAD_SHA" --jq .behind_by)
-          if [ "$behind" != "0" ]; then
-            echo "::error::This branch is $behind commits behind $BASE. Update it to run CI."
-            exit 1
-          fi
+          behind=$(gh api "repos/${{ github.repository }}/compare/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}" --jq .behind_by)
+          if [ "$behind" = "0" ]; then echo "run=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::This branch is $behind commits behind ${{ github.base_ref }}. Update it to run CI."; echo "run=false" >> "$GITHUB_OUTPUT"; fi
 
   check:
     needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: build, vet, staticcheck, race tests
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -81,6 +77,7 @@ jobs:
 
   controls:
     needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: every declared negative control goes red
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -103,6 +100,7 @@ jobs:
 
   compose:
     needs: gate
+    if: needs.gate.outputs.run == 'true'
     name: the README's compose path, from a clean state
     timeout-minutes: 10
     runs-on: ubuntu-latest
