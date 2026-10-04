@@ -1,13 +1,14 @@
 # .github/workflows/release.yml
 #
-# Runs only when a tag starting with `v` is pushed. It runs the full CI suite on
-# the tagged commit, builds the binaries and the image stamped with the tag, and
-# publishes nothing unless every step before the push succeeded.
+# Runs only when a version tag is pushed: `v` then a digit, as `v0.1.0`. It runs
+# the full CI suite on the tagged commit, builds the binaries and the image
+# stamped with the tag, and publishes nothing unless every step before the push
+# succeeded.
 name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v[0-9]*']
 
 env:
   # Where the image goes. The tag is appended, as `$IMAGE:v0.1.0`.
