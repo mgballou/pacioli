@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: true
 
 permissions:
@@ -14,6 +14,7 @@ permissions:
 jobs:
   gate:
     if: github.event.pull_request.draft == false
+    timeout-minutes: 3
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,6 +33,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: build, vet, staticcheck, race tests
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +79,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: every declared negative control goes red
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +102,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: the README's compose path, from a clean state
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
