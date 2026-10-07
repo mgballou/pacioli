@@ -1,12 +1,16 @@
 package schema_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"math/big"
+	"net/url"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/mgballou/pacioli/internal/schema"
 	"github.com/mgballou/pacioli/internal/testdb"
 )
 
@@ -19,6 +23,51 @@ const (
 	codeForeignKey   = "23503"
 	codeNotNullOrDup = "23505"
 )
+
+func TestApplyInstallsSchemaOnce(t *testing.T) {
+	admin := testdb.Open(t)
+	const name = "schema_apply_test"
+	if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + name + ` WITH (FORCE)`); err != nil {
+		t.Fatalf("remove prior database: %v", err)
+	}
+	if _, err := admin.Exec(`CREATE DATABASE ` + name); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + name + ` WITH (FORCE)`); err != nil {
+			t.Errorf("drop database: %v", err)
+		}
+	})
+
+	u, err := url.Parse(testdb.DSN())
+	if err != nil {
+		t.Fatalf("parse test DSN: %v", err)
+	}
+	u.Path = "/" + name
+	db, err := sql.Open("pgx", u.String())
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, tc := range []struct {
+		name      string
+		wantApply bool
+	}{
+		{name: "fresh database", wantApply: true},
+		{name: "schema already present", wantApply: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			applied, err := schema.Apply(context.Background(), db)
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if applied != tc.wantApply {
+				t.Errorf("Apply() applied = %t, want %t", applied, tc.wantApply)
+			}
+		})
+	}
+}
 
 const (
 	cash     = "11111111-1111-1111-1111-111111111111"
