@@ -65,6 +65,11 @@ func TestServeFinishesAnInFlightRequestAfterTheSignal(t *testing.T) {
 
 	cancel()
 	waitUntilRefused(t, ln.Addr().String())
+	select {
+	case err := <-served:
+		t.Fatalf("serveOn returned before the in-flight request was released: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
 	close(released)
 
 	select {
