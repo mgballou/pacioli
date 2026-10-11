@@ -16,8 +16,8 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 make db-up               # start the test database and block until it answers
 make db-reset            # drop the test database and start it again
 make db-down             # stop it and delete everything in it
-make fmt                 # fail if gofmt would rewrite any file
-make negative-controls   # every declared mutation, green before and red after
+make fmt                 # CI runs this as its own job
+make negative-controls   # every declared mutation, green before and red after; takes about five and a half minutes
 make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
 
