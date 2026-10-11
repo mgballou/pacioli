@@ -51,6 +51,8 @@ not burned either: correct the leg to -150, send it again under the same key, an
 
 ---
 
+Install Docker or OrbStack. From the repository root, start the app:
+
     docker compose up
 
 Then, in another terminal:
@@ -284,7 +286,8 @@ sent one. Nothing expires them, so the table grows forever.
 ## Running it
 
 `docker compose up` builds the binary, starts Postgres on a volume, and serves on
-`127.0.0.1:8080`. From a checkout instead:
+`127.0.0.1:8080`. To build and run from a checkout, install Go 1.26 and Docker
+or OrbStack, then run:
 
     make run      # start the database, build, and serve on 127.0.0.1:8080
 
