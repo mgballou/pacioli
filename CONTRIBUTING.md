@@ -31,8 +31,9 @@ reasoning behind the rules below; read it before arguing with one.
 ## Conventions
 
 - **Reach for the standard library first.** A new dependency needs an argument in
-  the change that adds it. `pgx` is the only one, and only its `database/sql`
-  driver registration is imported. `staticcheck` is fetched by `go run` at a
+  the change that adds it. `pgx` is the only one. Every query goes through
+  `database/sql`; Go imports `pgx` itself only to configure the pool and to read
+  `*pgconn.PgError`. `staticcheck` is fetched by `go run` at a
   pinned version, so it never enters `go.mod`.
 - **Put constraints in Postgres, never in Go.** `internal/schema` embeds one
   hand-written SQL file and runs it verbatim. `ledger.Post` has no validation
@@ -90,8 +91,8 @@ reasoning behind the rules below; read it before arguing with one.
   done
   ```
 
-  `internal/docs/docs.go` reads 40 percent and stays there. It holds five lines
-  of code, and its package comment and the one line over `Home` are each what
+  `internal/docs/docs.go` reads 40 percent and stays there. It is five lines
+  long, and its package comment and the one line over `Home` are each what
   this rule asks for.
 
 ## Adding a negative control
