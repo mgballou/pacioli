@@ -364,7 +364,7 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 ## Running the tests
 
 ```
-make all      # build, vet, staticcheck, race tests
+make all      # format check, build, vet, staticcheck, race tests
 make test     # race tests only; starts the database itself
 make db-down  # stop the test database and delete everything in it
 ```

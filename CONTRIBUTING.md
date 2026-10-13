@@ -2,11 +2,17 @@
 
 ## Getting set up
 
-Needs Go 1.26 and a container runtime, Docker or OrbStack. Everything else is the
-Makefile.
+Needs Go 1.26, Git, make, and Docker or OrbStack with Compose v2. Race tests need
+a C compiler, and the demo and compose-smoke targets need curl. The Makefile
+fetches staticcheck at its pinned version.
 
 ```
-make all                 # build, vet, staticcheck, race tests
+make                     # the same checks as make all
+make help                # every target and its purpose, plus address overrides
+make all                 # format check, build, vet, staticcheck, race tests
+make build               # compile bin/pacioli, stamped with the git version
+make vet                 # toolchain correctness checks
+make lint                # staticcheck at the pinned version
 make test                # race tests only; brings the database up itself
 make run                 # database up, build, serve on $(ADDR) — 127.0.0.1:8080
 make demo                # the ledger working, in seven steps over HTTP
@@ -16,10 +22,17 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 make db-up               # start the test database and block until it answers
 make db-reset            # drop the test database and start it again
 make db-down             # stop it and delete everything in it
+make db-psql             # open psql on the test database; run make db-up first
+make clean               # delete build output and the test database
 make fmt                 # fail if gofmt would rewrite any file
 make negative-controls   # every declared mutation, green before and red after
 make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
+
+The demo targets and `negative-controls` delete and restart the test database
+before and after their runs. `negative-controls` also needs a clean Git working
+tree. `compose-smoke` builds a separate app stack on port 8080 and removes that
+stack and its volume when it ends.
 
 The test database is Postgres 18 on `127.0.0.1:55432`, not 5432, so it cannot
 reach a server already running on the machine. Its data directory is a tmpfs, so
