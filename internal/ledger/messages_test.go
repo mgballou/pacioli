@@ -3,6 +3,7 @@ package ledger_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,6 +64,50 @@ func TestAnUnknownKindOnOpenNamesTheKindAndTheKindsThereAre(t *testing.T) {
 	}
 	if unknown.Kind != "assets" || len(unknown.Valid) != len(kinds) {
 		t.Errorf("the typed refusal is %+v, want the kind given and all %d kinds", unknown, len(kinds))
+	}
+}
+
+func TestAnUnknownKindListsTheKindsCurrentlyInPostgres(t *testing.T) {
+	db := testdb.Disposable(t, "dynamic_kinds_test")
+	if _, err := db.Exec(`ALTER TYPE account_kind ADD VALUE 'fund'`); err != nil {
+		t.Fatalf("add a kind to the schema: %v", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(); err != nil {
+			t.Errorf("rollback: %v", err)
+		}
+	})
+
+	err = ledger.Open(context.Background(), tx, ledger.Account{
+		Code: savings, Name: "Savings at bank", Kind: "assets", Currency: "GBP",
+	})
+	var unknown *ledger.UnknownKindError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("got %v, want an *UnknownKindError", err)
+	}
+	if !slices.Contains(unknown.Valid, "fund") {
+		t.Errorf("valid kinds %v do not include the kind added to Postgres", unknown.Valid)
+	}
+}
+
+func TestARefusalTrimsValuesToEightyRunes(t *testing.T) {
+	value := strings.Repeat("x", 81)
+	err := ledger.Open(context.Background(), testdb.Tx(t), ledger.Account{
+		Code: value, Name: "Savings at bank", Kind: "asset", Currency: "GBP",
+	})
+	if err == nil {
+		t.Fatal("opening an overlong code succeeded")
+	}
+	if !strings.Contains(err.Error(), strings.Repeat("x", 80)+"…") {
+		t.Fatalf("refusal does not show the first 80 runes and an ellipsis: %v", err)
+	}
+	if strings.Contains(err.Error(), value) {
+		t.Fatalf("refusal exposes the untrimmed value: %v", err)
 	}
 }
 
