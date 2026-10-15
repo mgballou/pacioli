@@ -14,9 +14,15 @@ ADDR        ?= 127.0.0.1:8080
 # A different port for the demo, so it cannot collide with a running `make run`.
 DEMO_ADDR ?= 127.0.0.1:58080
 
-.PHONY: all build clean compose-smoke db-down db-psql db-reset db-up demo demo-idempotency demo-post demo-serve fmt lint negative-controls run test vet
+.PHONY: all build clean compose-smoke db-down db-psql db-reset db-up demo demo-idempotency demo-post demo-serve fmt fuzz lint negative-controls run test vet
 
-all: build vet lint test
+all: build vet lint test fuzz
+
+## fuzz: fuzz each request boundary and amount JSON round-trip for ten seconds
+fuzz:
+	go test -run=^$$ -fuzz=FuzzAccountBody -fuzztime=10s ./internal/ledgerhttp
+	go test -run=^$$ -fuzz=FuzzTransactionBody -fuzztime=10s ./internal/ledgerhttp
+	go test -run=^$$ -fuzz=FuzzMinorJSONRoundTrip -fuzztime=10s ./internal/ledger
 
 ## build: compile the binary into bin/, stamped with the git version
 build:
