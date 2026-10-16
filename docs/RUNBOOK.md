@@ -3,8 +3,9 @@
 How to stand the ledger up in Kubernetes from the four manifests in `deploy/`,
 how to tell it is healthy, and how to read it when it will not come up. Every
 command here was run on 11 September 2026, and the output under it is what came
-back, cut where it shows `...`. `.github/workflows/k8s.yml` runs the same
-sequence on a kind cluster on every push.
+back, cut where it shows `...`. On a non-draft pull request whose branch is
+current with its base, `.github/workflows/k8s.yml` exercises the deployment and
+balanced-entry path on a kind cluster.
 
 ---
 
@@ -273,7 +274,12 @@ The entry under the same key replays the first answer, and the book keeps one
 entry:
 
 ```console
-$ curl -sS -i -X POST localhost:18080/v1/transactions ...   # the same request as above; headers
+$ curl -sS -i -X POST localhost:18080/v1/transactions \
+    -H 'Content-Type: application/json' \
+    -H 'Idempotency-Key: runbook-check-0001' \
+    -d '{"currency":"GBP","description":"Runbook check",
+         "postings":[{"account":"assets.cash","amount_minor":4500},
+                     {"account":"revenue.fees","amount_minor":-4500}]}'
 HTTP/1.1 201 Created
 Content-Length: 281
 Content-Type: application/json
@@ -547,3 +553,21 @@ $ kind delete cluster --name pacioli
 Deleting cluster "pacioli" ...
 Deleted nodes: ["pacioli-control-plane"]
 ```
+
+## Commands outside the test
+
+The balance-check `curl` commands run in `internal/docs/runbook_test.go` against
+an isolated database. The other commands depend on machine or cluster state:
+
+- `orbctl` reads OrbStack settings on the host.
+- `docker build` needs the host Docker daemon. `kind create`, `kind load`, and
+  `kind delete` create, populate, or remove a cluster.
+- `kubectl` reads or changes the selected Kubernetes context and cluster. The
+  commands here include applying manifests, waiting for workloads, inspecting
+  resources and logs, forwarding ports, scaling, deleting pods and namespaces,
+  and checking persistent volumes. `.github/workflows/k8s.yml` covers the
+  deployment, service write, and database restart path on kind.
+- The two `curl` commands on port 8080 diagnose a host where compose and
+  `kubectl port-forward` bind different loopback addresses. They need both
+  listeners and the host's IPv4/IPv6 binding behavior, which an isolated test
+  server cannot reproduce.
