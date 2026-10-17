@@ -1,0 +1,28 @@
+# With both deferred balance checks disabled, a generated refusal is accepted.
+
+title: the property test detects disabled balance triggers
+file: internal/schema/0001_ledger.sql
+run: make db-reset && go test -count=1 -run TestRandomBalancedEntriesAndRefusalsStayBalancedWithConcurrentWriters -v ./internal/ledger/
+--- before
+CREATE CONSTRAINT TRIGGER transactions_must_balance
+    AFTER INSERT ON transactions
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION transactions_balance_check();
+
+CREATE CONSTRAINT TRIGGER balance_checks_must_balance
+    AFTER INSERT ON balance_checks
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION queued_balance_check();
+--- after
+CREATE CONSTRAINT TRIGGER transactions_must_balance
+    AFTER INSERT ON transactions
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION transactions_balance_check();
+
+CREATE CONSTRAINT TRIGGER balance_checks_must_balance
+    AFTER INSERT ON balance_checks
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION queued_balance_check();
+
+ALTER TABLE transactions DISABLE TRIGGER transactions_must_balance;
+ALTER TABLE balance_checks DISABLE TRIGGER balance_checks_must_balance;
