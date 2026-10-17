@@ -291,6 +291,25 @@ func TestAFieldThisEndpointDoesNotDefineInsideAPostingIsRefused(t *testing.T) {
 	}
 }
 
+func TestDuplicateJSONFieldsAreRefused(t *testing.T) {
+	srv := serve(t, seeded)
+
+	res, body := post(t, srv.URL+"/v1/transactions", `{
+	  "currency": "GBP",
+	  "description": "Refund, in full",
+	  "postings": [
+	    {"account": "assets.cash", "amount_minor": -500, "amount_minor": -400},
+	    {"account": "liabilities.customer", "amount_minor": 500}
+	  ]
+	}`)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400 for a duplicate field: %s", res.StatusCode, body)
+	}
+	if bal := balanceOver(t, srv, cash); bal != 4500 {
+		t.Errorf("%s = %d after the refused body, want 4500", cash, bal)
+	}
+}
+
 func TestAFieldOfTheWrongTypeIsRefused(t *testing.T) {
 	srv := serve(t, seeded)
 

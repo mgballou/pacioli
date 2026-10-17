@@ -25,7 +25,8 @@ type badField struct {
 	Valid     []string `json:"valid,omitempty"`
 
 	// unknown is true when the name is the fault rather than the value. json drops it.
-	unknown bool
+	unknown   bool
+	duplicate bool
 }
 
 // jsonUnmarshaler is what a type implements when it owns its own reading. Such a
@@ -65,6 +66,10 @@ func (s *server) decode(w http.ResponseWriter, r *http.Request, v any, ceiling i
 		})
 		return false
 	}
+	if bad := duplicateFields(raw, ""); len(bad) > 0 {
+		s.refuseFields(w, r, bad)
+		return false
+	}
 
 	if bad := readObject(raw, reflect.ValueOf(v).Elem(), ""); len(bad) > 0 {
 		s.refuseFields(w, r, bad)
@@ -89,10 +94,61 @@ func (s *server) refuseFields(w http.ResponseWriter, r *http.Request, bad []badF
 		body.Fields = bad
 	case bad[0].unknown:
 		body.Error = "no such field"
+	case bad[0].duplicate:
+		body.Error = "the field appears more than once"
 	default:
 		body.Error = "the field is not the shape this endpoint takes"
 	}
 	s.write(w, r, http.StatusBadRequest, body)
+}
+
+// duplicateFields preserves object members long enough to reject repeated names.
+func duplicateFields(raw json.RawMessage, path string) []badField {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil
+	}
+
+	var bad []badField
+	switch tok {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for dec.More() {
+			tok, err := dec.Token()
+			if err != nil {
+				return bad
+			}
+			name, ok := tok.(string)
+			if !ok {
+				return bad
+			}
+			var value json.RawMessage
+			if err := dec.Decode(&value); err != nil {
+				return bad
+			}
+			if seen[name] {
+				bad = append(bad, badField{
+					Parameter: under(path, name),
+					Value:     sent(value),
+					Expected:  "the field once",
+					duplicate: true,
+				})
+			} else {
+				seen[name] = true
+			}
+			bad = append(bad, duplicateFields(value, under(path, name))...)
+		}
+	case json.Delim('['):
+		for i := 0; dec.More(); i++ {
+			var value json.RawMessage
+			if err := dec.Decode(&value); err != nil {
+				return bad
+			}
+			bad = append(bad, duplicateFields(value, fmt.Sprintf("%s[%d]", path, i))...)
+		}
+	}
+	return bad
 }
 
 // unreadable answers a body the json reader could not finish, and says where it stopped.
