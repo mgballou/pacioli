@@ -2,8 +2,8 @@
 
 ## Getting set up
 
-Needs Go 1.26 and a container runtime, Docker or OrbStack. Everything else is the
-Makefile.
+Install Go 1.26 and Docker or OrbStack. Everything else is the Makefile, and
+`make all` is the full local check:
 
 ```
 make all                 # build, vet, staticcheck, race tests
@@ -21,9 +21,16 @@ make negative-controls   # every declared mutation, green before and red after
 make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
 
-The test database is Postgres 18 on `127.0.0.1:55432`, not 5432, so it cannot
-reach a server already running on the machine. Its data directory is a tmpfs, so
-it starts empty every time.
+`make all` builds the binary and runs `go vet` and Staticcheck. It then starts
+Postgres 18 from `compose.test.yaml` and runs every test against it with the race
+detector. The database listens on `127.0.0.1:55432`, not 5432, so it cannot reach
+a server already running on the machine. Its data directory is a tmpfs and starts
+empty.
+
+Tests connect with `LEDGER_TEST_DSN`, which defaults to
+`postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
+`LEDGER_TEST_DSN` to a connection string for another disposable database when
+needed. Its database name must end in `_test`.
 
 `make all` has to pass before a change is finished. `docs/DESIGN.md` gives the
 reasoning behind the rules below; read it before arguing with one.

@@ -51,6 +51,8 @@ not burned either: correct the leg to -150, send it again under the same key, an
 
 ---
 
+Install Docker or OrbStack. From the repository root, start the app:
+
     docker compose up
 
 Then, in another terminal:
@@ -284,7 +286,8 @@ sent one. Nothing expires them, so the table grows forever.
 ## Running it
 
 `docker compose up` builds the binary, starts Postgres on a volume, and serves on
-`127.0.0.1:8080`. From a checkout instead:
+`127.0.0.1:8080`. To build and run from a checkout, install Go 1.26 and Docker
+or OrbStack, then run:
 
     make run      # start the database, build, and serve on 127.0.0.1:8080
 
@@ -363,18 +366,23 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 
 ## Running the tests
 
-```
-make all      # build, vet, staticcheck, race tests
-make test     # race tests only; starts the database itself
-make db-down  # stop the test database and delete everything in it
-```
+Install Go 1.26 and Docker or OrbStack. From the repository root, run:
 
-Needs Go 1.26 and a container runtime. Tests run against real Postgres and never
-a mock. Each test gets a transaction that is rolled back when it ends, so order
-cannot matter. See `internal/testdb`.
+    make all
 
-The test database is Postgres 18 on `127.0.0.1:55432`, described in
-`compose.test.yaml`. Its data directory is a tmpfs, so it starts empty every run.
+This builds the binary and runs `go vet` and Staticcheck. It then starts Postgres
+18 from `compose.test.yaml` on `127.0.0.1:55432` and runs every test against it
+with the race detector. Its data directory is a tmpfs and starts empty.
+
+Tests run against real Postgres and never a mock. Each test gets a transaction
+that is rolled back when it ends, so order cannot matter. See `internal/testdb`.
+
+Tests connect with `LEDGER_TEST_DSN`, which defaults to
+`postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
+`LEDGER_TEST_DSN` to a connection string for another disposable database when
+needed. Its database name must end in `_test`.
+
+Run `make db-down` to stop and remove the test database.
 
 ## Proving the tests can fail
 
