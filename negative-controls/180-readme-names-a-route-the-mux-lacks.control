@@ -1,0 +1,6 @@
+title: README route list catches a missing mounted endpoint
+file: internal/ledgerhttp/ledgerhttp.go
+run: go test -count=1 -run TestTheREADMEListsEveryMountedEndpointAndItsExamplesUseMountedPatterns -v ./internal/ledgerhttp/
+--- before
+	mux.HandleFunc("GET /v1/accounts/{code}", s.balance)
+--- after

@@ -2,8 +2,8 @@
 
 ## Getting set up
 
-Needs Go 1.26 and a container runtime, Docker or OrbStack. Everything else is the
-Makefile.
+Install Go 1.26 and Docker or OrbStack. Everything else is the Makefile, and
+`make all` is the full local check:
 
 ```
 make all                 # build, vet, staticcheck, race tests
@@ -18,12 +18,21 @@ make db-reset            # drop the test database and start it again
 make db-down             # stop it and delete everything in it
 make fmt                 # fail if gofmt would rewrite any file
 make negative-controls   # every declared mutation, green before and red after
+make dist                # the binary for linux and darwin, amd64 and arm64, in dist/
+make image               # the container image, labeled with the version and commit
 make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
 
-The test database is Postgres 18 on `127.0.0.1:55432`, not 5432, so it cannot
-reach a server already running on the machine. Its data directory is a tmpfs, so
-it starts empty every time.
+`make all` builds the binary and runs `go vet` and Staticcheck. It then starts
+Postgres 18 from `compose.test.yaml` and runs every test against it with the race
+detector. The database listens on `127.0.0.1:55432`, not 5432, so it cannot reach
+a server already running on the machine. Its data directory is a tmpfs and starts
+empty.
+
+Tests connect with `LEDGER_TEST_DSN`, which defaults to
+`postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
+`LEDGER_TEST_DSN` to a connection string for another disposable database when
+needed. Its database name must end in `_test`.
 
 `make all` has to pass before a change is finished. `docs/DESIGN.md` gives the
 reasoning behind the rules below; read it before arguing with one.
@@ -106,6 +115,15 @@ is a no-op against a warm container, so the next `go test` would quietly ask a
 ledger with no rule. Control 080 mutates the account code's `UNIQUE` and 081
 begins with `make db-reset &&` for that reason, the same way 075 covers 074. The
 last control has to leave the shared container whole.
+
+## Releasing
+
+Push a tag that starts with `v`. `.github/workflows/release.yml` runs the CI
+suite on the tagged commit, then `make dist` and `make image` with the tag as
+`VERSION`. It pushes the image to `ghcr.io/mgballou/pacioli:<tag>` and attaches
+the binaries and `SHA256SUMS` to a GitHub release for the tag. No other push
+publishes anything. The image name is the `IMAGE` variable at the top of the
+workflow. The runner is amd64, so the image is linux/amd64 only.
 
 ## Traps
 

@@ -3,17 +3,21 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # release.yml runs this suite on the tagged commit before it publishes.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.draft }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   gate:
-    if: github.event.pull_request.draft == false
+    # Only a pull request can be a draft or behind its base. A workflow_call
+    # from a tag push has neither, and always runs the suite.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 3
     runs-on: ubuntu-latest
     permissions:
@@ -25,6 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           behind=$(gh api "repos/${{ github.repository }}/compare/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}" --jq .behind_by)
           if [ "$behind" = "0" ]; then echo "run=true" >> "$GITHUB_OUTPUT"
           else echo "::notice::This branch is $behind commits behind ${{ github.base_ref }}. Update it to run CI."; echo "run=false" >> "$GITHUB_OUTPUT"; fi
