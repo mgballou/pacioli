@@ -545,8 +545,10 @@ $ kubectl get pv
 No resources found
 ```
 
-Deleting the namespace deletes the claim, and the volume goes with it. Every
-account and entry in the book is gone. On kind, the cluster goes too:
+Deleting the namespace removes the claim. With kind's default StorageClass,
+the reclaim policy is `Delete`, so the volume goes with it and the command above
+finds no PV. A StorageClass with the `Retain` policy leaves the PV and its data
+behind for manual cleanup. On kind, the cluster goes too:
 
 ```console
 $ kind delete cluster --name pacioli

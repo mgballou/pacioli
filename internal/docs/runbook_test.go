@@ -70,6 +70,9 @@ func TestEveryRunbookCommandIsRunOrListedAsNonTestable(t *testing.T) {
 	if appendixAt < 0 {
 		t.Fatal("docs/RUNBOOK.md must classify commands outside the test")
 	}
+	if !strings.Contains(text, "reclaim policy") || !strings.Contains(text, "Retain") {
+		t.Fatal("docs/RUNBOOK.md must explain that PV deletion depends on its reclaim policy")
+	}
 	appendix := text[appendixAt:]
 
 	for _, command := range commands {
