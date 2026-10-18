@@ -162,6 +162,22 @@ func TestADuplicateLeavesTheTransactionUsable(t *testing.T) {
 	}
 }
 
+func TestOnceWithoutAWriteCallbackReturnsAnErrorBeforeReservingTheKey(t *testing.T) {
+	tx := testdb.Tx(t)
+	seedAccounts(t, tx)
+
+	_, err := ledger.Once(context.Background(), tx, claim(t, "no callback"), nil)
+	if err == nil {
+		t.Fatal("Once with no write callback returned no error")
+	}
+	if got := scalar(t, tx, `SELECT count(*) FROM idempotency_keys WHERE key = $1`, claim(t, "no callback").Key); got != 0 {
+		t.Errorf("%d keys were reserved without a write callback, want 0", got)
+	}
+	if _, err := tx.Exec(`SELECT 1`); err != nil {
+		t.Errorf("transaction after the refused call: %v", err)
+	}
+}
+
 func TestAnEntryReadsBackAsItWasWritten(t *testing.T) {
 	ctx := context.Background()
 	tx := testdb.Tx(t)
