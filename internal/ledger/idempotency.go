@@ -48,6 +48,10 @@ const settledConstraint = "idempotency_keys_must_be_settled"
 // replays the first call's transaction; a key used for a different request is
 // refused with ErrKeyReused. The caller's transaction is left usable either way.
 func Once(ctx context.Context, tx *sql.Tx, c Claim, write func() (string, error)) (Record, error) {
+	if write == nil {
+		return Record{}, errors.New("once needs a write callback")
+	}
+
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT `+onceSavepoint); err != nil {
 		return Record{}, fmt.Errorf("savepoint: %w", err)
 	}
