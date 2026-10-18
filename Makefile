@@ -75,8 +75,8 @@ db-up:
 
 ## db-reset: drop the database and start it again, so the schema is applied fresh
 db-reset:
-	@$(COMPOSE) down --volumes --remove-orphans >/dev/null 2>&1
-	@$(COMPOSE) up --detach --wait >/dev/null 2>&1
+	@out="$$($(COMPOSE) down --volumes --remove-orphans 2>&1)" || { status=$$?; printf '%s\n' "$$out" >&2; exit $$status; }
+	@out="$$($(COMPOSE) up --detach --wait 2>&1)" || { status=$$?; printf '%s\n' "$$out" >&2; exit $$status; }
 
 ## db-down: stop the test database and delete everything in it
 db-down:
