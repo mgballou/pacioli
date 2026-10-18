@@ -242,7 +242,7 @@ func store(db *sql.DB, d deadlines) ledgerhttp.Pool {
 func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("read %s as a connection string: %w", configuredDatabaseLabel, err)
+		return nil, fmt.Errorf("read %s as a connection string: invalid connection string", configuredDatabaseLabel)
 	}
 	for name, value := range databaseGraces {
 		if _, given := cfg.RuntimeParams[name]; !given {
