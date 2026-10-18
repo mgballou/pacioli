@@ -366,13 +366,21 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 
 ## Running the tests
 
-Install Go 1.26 and Docker or OrbStack. From the repository root, run:
+Install Go 1.26, Git, make, and Docker or OrbStack with Compose v2. Race tests
+need a C compiler. From the repository root, run:
 
-    make all
+```
+make help    # list every target and its purpose
+make all     # format check, build, vet, staticcheck, race tests, fuzz
+make test    # race tests only; starts the database itself
+make fuzz    # fuzz request decoding and amount JSON for ten seconds each
+make db-down # stop the test database and delete everything in it
+```
 
-This builds the binary and runs `go vet` and Staticcheck. It then starts Postgres
-18 from `compose.test.yaml` on `127.0.0.1:55432` and runs every test against it
-with the race detector. Its data directory is a tmpfs and starts empty.
+`make all` checks formatting, builds the binary, runs `go vet` and Staticcheck,
+then starts Postgres 18 from `compose.test.yaml` on `127.0.0.1:55432` and runs
+every test against it with the race detector and all three fuzz targets. Its data
+directory is a tmpfs and starts empty.
 
 Tests run against real Postgres and never a mock. Each test gets a transaction
 that is rolled back when it ends, so order cannot matter. See `internal/testdb`.

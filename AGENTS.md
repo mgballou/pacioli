@@ -11,8 +11,8 @@ Read these first:
 - `docs/DESIGN.md` — twenty-five decisions, each with the alternative it beat. A
   question shaped "why does this not…" is almost always answered there.
 
-`make all` (build, vet, staticcheck, race tests) has to pass before a change is
-finished. It needs Docker or OrbStack running. Most of the history went
+`make all` (format check, build, vet, staticcheck, race tests) has to pass before
+a change is finished. It needs Docker or OrbStack running. Most of the history went
 straight to `main`. The Kubernetes manifests, the runbook and the body ceilings
 came in as pull requests, merged with a merge commit so their own commits stay.
 
