@@ -259,13 +259,28 @@ func TestDatabaseDiagnosticsNeverEchoConnectionStrings(t *testing.T) {
 	} {
 		_, err := open(context.Background(), dsn)
 		if err == nil {
-			t.Fatalf("open(%q) unexpectedly connected with the wrong password", dsn)
+			t.Fatal("open unexpectedly connected with the supplied password")
 		}
 		if strings.Contains(err.Error(), "secret") {
-			t.Errorf("open(%q) returned an error that exposes the password: %v", dsn, err)
+			t.Error("open returned an error that exposes the supplied password")
 		}
 		if !strings.Contains(err.Error(), configuredDatabaseLabel) {
-			t.Errorf("open(%q) error = %v, want the safe database label", dsn, err)
+			t.Error("open error omitted the safe database label")
+		}
+	}
+}
+
+func TestMalformedConnectionStringDiagnosticDoesNotEchoDSN(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://ledger@127.0.0.1/ledger?password=secret&statement_cache_capacity=bad",
+		"host=127.0.0.1 user=ledger password=secret port=bad",
+	} {
+		_, err := open(context.Background(), dsn)
+		if err == nil {
+			t.Fatal("open accepted a malformed connection string")
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Error("malformed connection string error exposed the supplied password")
 		}
 	}
 }
