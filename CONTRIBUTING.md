@@ -24,9 +24,9 @@ make db-reset            # drop the test database and start it again
 make db-down             # stop it and delete everything in it
 make db-psql             # open psql on the test database; run make db-up first
 make clean               # remove build output and the test database
-make fmt                 # fail if gofmt would rewrite any file
+make fmt                 # fail if gofmt would rewrite any file; CI runs this as its own job
 make fuzz                # fuzz request decoding and amount JSON for ten seconds each
-make negative-controls   # every declared mutation, green before and red after
+make negative-controls   # every declared mutation, green before and red after; takes about five and a half minutes
 make dist                # the binary for linux and darwin, amd64 and arm64, in dist/
 make image               # the container image, labeled with the version and commit
 make compose-smoke       # the README's compose path from nothing, to an empty trial
