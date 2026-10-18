@@ -29,8 +29,11 @@ empty.
 
 Tests connect with `LEDGER_TEST_DSN`, which defaults to
 `postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
-`LEDGER_TEST_DSN` to a connection string for another disposable database when
-needed. Its database name must end in `_test`.
+`LEDGER_TEST_DSN` to a connection string for a disposable server when needed.
+The role must have `CREATEDB`; tests that use `testdb.Disposable` create and
+drop their own databases. Its database name must end in `_test`. Run the suite
+with `go test -race ./...` to use the override directly; `make test` starts the
+Compose database first.
 
 `make all` has to pass before a change is finished. `docs/DESIGN.md` gives the
 reasoning behind the rules below; read it before arguing with one.
