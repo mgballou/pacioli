@@ -2,7 +2,7 @@
 
 title: the server is closed on the signal instead of drained
 file: cmd/pacioli/serve.go
-run: go test -count=1 -run TestServeFinishesAnInFlightRequestAfterTheSignal -v ./cmd/pacioli/
+run: go test -count=1 -run TestDrainFinishesAnInFlightRequest -v ./cmd/pacioli/
 --- before
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainGrace)
 	defer cancel()

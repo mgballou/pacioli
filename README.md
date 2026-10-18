@@ -76,9 +76,9 @@ A total of them has no ceiling: a balance, a side of the trial balance and the
 net an entry is refused with are all `numeric` in Postgres and arbitrary
 precision in Go. Every amount the book takes, it can add up.
 
-The only dependency is `pgx`. Only its `database/sql` driver registration is
-imported, and every query goes through `database/sql`. One hand-written SQL file
-is the whole schema.
+The only dependency is `pgx`. Every query goes through `database/sql`; Go
+imports `pgx` itself only to configure the pool and to read `*pgconn.PgError`.
+One hand-written SQL file is the whole schema.
 
 `docs/DESIGN.md` gives the reasoning behind each of these choices.
 

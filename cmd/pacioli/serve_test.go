@@ -25,21 +25,25 @@ const (
 	customer = "liabilities.customer"
 )
 
-func TestServeFinishesAnInFlightRequestAfterTheSignal(t *testing.T) {
+func TestDrainFinishesAnInFlightRequest(t *testing.T) {
 	ln := listen(t)
 
 	entered, released := make(chan struct{}), make(chan struct{})
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "15")
+		fmt.Fprint(w, "started")
+		w.(http.Flusher).Flush()
 		close(entered)
 		<-released
 		fmt.Fprint(w, "finished")
 	})
 
+	srv := &http.Server{Handler: handler}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	served := make(chan error, 1)
-	go func() { served <- serveOn(ctx, ln, handler, defaultDeadlines(), quiet()) }()
 
 	type answer struct {
 		body string
@@ -64,6 +68,8 @@ func TestServeFinishesAnInFlightRequestAfterTheSignal(t *testing.T) {
 	}
 
 	cancel()
+	drained := make(chan error, 1)
+	go func() { drained <- drain(ctx, srv) }()
 	waitUntilRefused(t, ln.Addr().String())
 	close(released)
 
@@ -72,20 +78,29 @@ func TestServeFinishesAnInFlightRequestAfterTheSignal(t *testing.T) {
 		if got.err != nil {
 			t.Fatalf("the request that was already in flight did not finish: %v", got.err)
 		}
-		if got.body != "finished" {
-			t.Errorf("the in-flight request answered %q, want %q", got.body, "finished")
+		if got.body != "startedfinished" {
+			t.Errorf("the in-flight request answered %q, want %q", got.body, "startedfinished")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the request that was already in flight never came back")
 	}
 
 	select {
-	case err := <-served:
+	case err := <-drained:
 		if err != nil {
-			t.Errorf("serveOn returned %v, want nil — a drain that reports a failure exits on top of the request it was draining", err)
+			t.Errorf("drain returned %v, want nil — it must finish the request it was draining", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("serveOn never returned after the signal")
+		t.Fatal("drain never returned after the request finished")
+	}
+
+	select {
+	case err := <-serveErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("Serve returned %v, want http.ErrServerClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve never returned after the listener closed")
 	}
 }
 
