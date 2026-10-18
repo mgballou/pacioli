@@ -252,6 +252,18 @@ func TestTheServerDefaultsToTheDatabaseTheTestsUse(t *testing.T) {
 	}
 }
 
+func TestDatabaseDiagnosticsNeverEchoConnectionStrings(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://ledger:secret@db.example/ledger?sslmode=disable",
+		"postgres://ledger@db.example/ledger?password=secret&sslmode=disable",
+		"host=db.example user=ledger password=secret dbname=ledger",
+	} {
+		if got := redacted(dsn); strings.Contains(got, "secret") {
+			t.Errorf("redacted(%q) = %q, which exposes the password", dsn, got)
+		}
+	}
+}
+
 // txStore never commits: postings are append-only, so a committed test row would move every other test's counts.
 type txStore struct{ tx *sql.Tx }
 
