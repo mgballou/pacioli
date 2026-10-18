@@ -49,6 +49,10 @@ Content-Type: application/json
 Nothing was written. The key reservation and the entry are one transaction, so the key is
 not burned either: correct the leg to -150, send it again under the same key, and it posts.
 
+Those three accounts have to be open first. `make demo` opens them over the API, takes the
+deposit, then refuses it with a leg mistyped. It resets its database — the one `make run`
+serves, apart from the Compose volume — before and after.
+
 ---
 
     docker compose up
