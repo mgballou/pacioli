@@ -2,11 +2,17 @@
 
 ## Getting set up
 
-Install Go 1.26 and Docker or OrbStack. Everything else is the Makefile, and
-`make all` is the full local check:
+Needs Go 1.26, Git, make, and Docker or OrbStack with Compose v2. Race tests need
+a C compiler, and the demo and compose-smoke targets need curl. The Makefile
+fetches staticcheck at its pinned version.
 
 ```
-make all                 # build, vet, staticcheck, race tests
+make                     # same checks as make all
+make help                # every target and its purpose, plus address overrides
+make all                 # format check, build, vet, staticcheck, race tests, fuzz
+make build               # compile bin/pacioli, stamped with the git version
+make vet                 # toolchain correctness checks
+make lint                # staticcheck at the pinned version
 make test                # race tests only; brings the database up itself
 make run                 # database up, build, serve on $(ADDR) — 127.0.0.1:8080
 make demo                # the ledger working, in seven steps over HTTP
@@ -16,23 +22,31 @@ make demo-serve          # the binary on a socket, four exchanges, a clean exit
 make db-up               # start the test database and block until it answers
 make db-reset            # drop the test database and start it again
 make db-down             # stop it and delete everything in it
-make fmt                 # fail if gofmt would rewrite any file
-make negative-controls   # every declared mutation, green before and red after
+make db-psql             # open psql on the test database; run make db-up first
+make clean               # remove build output and the test database
+make fmt                 # fail if gofmt would rewrite any file; CI runs this as its own job
+make fuzz                # fuzz request decoding and amount JSON for ten seconds each
+make negative-controls   # every declared mutation, green before and red after; takes about five and a half minutes
 make dist                # the binary for linux and darwin, amd64 and arm64, in dist/
 make image               # the container image, labeled with the version and commit
 make compose-smoke       # the README's compose path from nothing, to an empty trial
 ```
 
-`make all` builds the binary and runs `go vet` and Staticcheck. It then starts
-Postgres 18 from `compose.test.yaml` and runs every test against it with the race
-detector. The database listens on `127.0.0.1:55432`, not 5432, so it cannot reach
-a server already running on the machine. Its data directory is a tmpfs and starts
-empty.
+`make all` checks formatting, builds the binary, runs `go vet` and Staticcheck,
+then starts Postgres 18 from `compose.test.yaml` and runs every test against it
+with the race detector and the three fuzz targets. The database listens on
+`127.0.0.1:55432`, not 5432, so it cannot reach a server already running on the
+machine. Its data directory is a tmpfs and starts empty.
 
 Tests connect with `LEDGER_TEST_DSN`, which defaults to
 `postgres://ledger:ledger@127.0.0.1:55432/ledger_test?sslmode=disable`. Set
 `LEDGER_TEST_DSN` to a connection string for another disposable database when
 needed. Its database name must end in `_test`.
+
+The demo targets and `negative-controls` delete and restart the test database
+before and after their runs. Each target reports a cleanup failure. `negative-controls`
+also needs a clean Git working tree. `compose-smoke` builds a separate app stack
+on port 8080 and removes that stack and its volume when it ends.
 
 `make all` has to pass before a change is finished. `docs/DESIGN.md` gives the
 reasoning behind the rules below; read it before arguing with one.

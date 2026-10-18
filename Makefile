@@ -18,9 +18,21 @@ ADDR        ?= 127.0.0.1:8080
 # A different port for the demo, so it cannot collide with a running `make run`.
 DEMO_ADDR ?= 127.0.0.1:58080
 
-.PHONY: all build clean compose-smoke db-down db-psql db-reset db-up demo demo-idempotency demo-post demo-serve dist fmt image lint negative-controls run test vet
+.PHONY: all build clean compose-smoke db-down db-psql db-reset db-up demo demo-idempotency demo-post demo-serve dist fmt fuzz help image lint negative-controls run test vet
 
-all: build vet lint test
+## all: check formatting, build, vet, lint, and run every race test (default)
+all: fmt build vet lint test fuzz
+
+## help: list every target and its purpose
+help:
+	@printf '%s\n' 'Usage: make [target] (default: all)' 'Overrides: ADDR=$(ADDR) DEMO_ADDR=$(DEMO_ADDR)' ''
+	@awk '/^## / { sub(/^## /, ""); split($$0, parts, ": "); printf "  %-20s %s\n", parts[1], substr($$0, length(parts[1]) + 3) }' $(MAKEFILE_LIST)
+
+## fuzz: fuzz each request boundary and amount JSON round-trip for ten seconds
+fuzz:
+	go test -run=^$$ -fuzz=FuzzAccountBody -fuzztime=10s ./internal/ledgerhttp
+	go test -run=^$$ -fuzz=FuzzTransactionBody -fuzztime=10s ./internal/ledgerhttp
+	go test -run=^$$ -fuzz=FuzzMinorJSONRoundTrip -fuzztime=10s ./internal/ledger
 
 ## build: compile the binary into bin/, stamped with the git version
 build:
@@ -50,7 +62,7 @@ image:
 test: db-up
 	go test -race ./...
 
-## run: start the database, build, and serve the ledger on $(ADDR)
+## run: start the database, build, and serve on ADDR; Ctrl-C stops it
 run: db-up build
 	$(BIN_DIR)/$(BINARY) serve -addr $(ADDR)
 
@@ -59,8 +71,8 @@ demo:
 	@$(MAKE) --no-print-directory db-reset
 	@$(MAKE) --no-print-directory -s build
 	@tools/demo.sh $(BIN_DIR)/$(BINARY) $(DEMO_ADDR); status=$$?; \
-		$(MAKE) --no-print-directory db-reset; exit $$status
-## demo-idempotency: one request sent twice under one key, then sixteen at once
+		$(MAKE) --no-print-directory db-reset || exit $$?; exit $$status
+## demo-idempotency: reset the database, send one key twice, then sixteen times at once
 demo-idempotency:
 	@$(MAKE) --no-print-directory db-reset
 	@$(MAKE) --no-print-directory -s build
@@ -70,34 +82,34 @@ demo-idempotency:
 			echo '$$ go test -race -count=1 -run TestManyRequestsWithOneKeyAtOnceWriteOnce -v ./internal/ledgerhttp/'; \
 			go test -race -count=1 -run TestManyRequestsWithOneKeyAtOnceWriteOnce -v ./internal/ledgerhttp/ || status=$$?; \
 		fi; \
-		$(MAKE) --no-print-directory db-reset; exit $$status
+		$(MAKE) --no-print-directory db-reset || exit $$?; exit $$status
 
-## demo-post: a transaction taken and one refused, with the balance either side
+## demo-post: reset the database, show a transaction taken and one refused
 demo-post:
 	@$(MAKE) --no-print-directory db-reset
 	@$(MAKE) --no-print-directory -s build
 	@tools/post-demo.sh $(BIN_DIR)/$(BINARY) $(DEMO_ADDR); status=$$?; \
-		$(MAKE) --no-print-directory db-reset; exit $$status
+		$(MAKE) --no-print-directory db-reset || exit $$?; exit $$status
 
-## demo-serve: the binary serving on a socket, then a clean exit on SIGINT
+## demo-serve: reset the database, serve on a socket, then exit on SIGINT
 demo-serve:
 	@$(MAKE) --no-print-directory db-reset
 	@$(MAKE) --no-print-directory -s build
 	@tools/serve-demo.sh $(BIN_DIR)/$(BINARY) $(DEMO_ADDR); status=$$?; \
-		$(MAKE) --no-print-directory db-reset; exit $$status
-## compose-smoke: the README's compose path from nothing, answering an empty trial balance
+		$(MAKE) --no-print-directory db-reset || exit $$?; exit $$status
+## compose-smoke: build a separate stack on port 8080 and check its empty trial balance
 compose-smoke:
 	@tools/compose-smoke.sh
-## negative-controls: apply every declared mutation and check each test turns red
+## negative-controls: reset the database and check every mutation turns red; needs a clean Git tree
 negative-controls:
 	@$(MAKE) --no-print-directory db-reset
 	@go run ./tools/controls; status=$$?; \
-		$(MAKE) --no-print-directory db-reset; exit $$status
+		$(MAKE) --no-print-directory db-reset || exit $$?; exit $$status
 ## db-up: start the test database and block until it answers
 db-up:
 	$(COMPOSE) up --detach --wait
 
-## db-reset: drop the database and start it again, so the schema is applied fresh
+## db-reset: delete the test database and start it again empty
 db-reset:
 	@$(COMPOSE) down --volumes --remove-orphans >/dev/null 2>&1
 	@$(COMPOSE) up --detach --wait >/dev/null 2>&1
@@ -106,7 +118,7 @@ db-reset:
 db-down:
 	$(COMPOSE) down --volumes --remove-orphans
 
-## db-psql: open a shell on the test database
+## db-psql: open a shell on the test database; run db-up first
 db-psql:
 	$(COMPOSE) exec postgres psql -U ledger -d ledger_test
 
@@ -120,7 +132,7 @@ lint:
 
 ## fmt: report any file gofmt would rewrite, and fail if there are any
 fmt:
-	@out="$$(gofmt -l .)"; \
+	@out="$$(gofmt -l .)" || exit $$?; \
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 ## clean: remove build output and the test database
