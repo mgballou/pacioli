@@ -383,13 +383,16 @@ postgres-0                1/1     Running   0             24h
 
 ```console
 $ kubectl logs -n pacioli pod/ledger-5cd6786775-8dl6m --previous
-pacioli: reach the database at postgres://pacioli:xxxxx@postgres:5432/pacioli?sslmode=disable: failed to connect to `user=pacioli database=pacioli`: hostname resolving error: lookup postgres on 10.96.0.10:53: no such host
+pacioli: reach the database at the configured database: failed to connect to `user=pacioli database=pacioli`: hostname resolving error: lookup postgres on 10.96.0.10:53: no such host
 
 Start it with: make db-up, or point somewhere else with -dsn or $LEDGER_DSN
 ```
 
-The ledger could not reach Postgres and exited. `no such host` means the name
-`postgres` has no ready pod behind it yet. The binary's advice under it,
+The ledger could not reach Postgres and exited. Startup diagnostics identify
+the target as `the configured database` and leave `LEDGER_DSN` out of the log;
+passwords can appear in URL user information, query parameters, or keyword/value
+connection strings. `no such host` means the name `postgres` has no ready pod
+behind it yet. The binary's advice under it,
 `make db-up`, is for a laptop: it starts the test database on this machine,
 which the cluster cannot reach. In a cluster, wait for `postgres-0` to read
 `1/1` in `kubectl get pods -n pacioli`. The ledger comes up on its next restart.

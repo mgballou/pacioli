@@ -252,6 +252,39 @@ func TestTheServerDefaultsToTheDatabaseTheTestsUse(t *testing.T) {
 	}
 }
 
+func TestDatabaseDiagnosticsNeverEchoConnectionStrings(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://ledger@127.0.0.1:1/ledger_test?password=secret&sslmode=disable",
+		"host=127.0.0.1 port=1 user=ledger password=secret dbname=ledger_test sslmode=disable",
+	} {
+		_, err := open(context.Background(), dsn)
+		if err == nil {
+			t.Fatal("open unexpectedly connected with the supplied password")
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Error("open returned an error that exposes the supplied password")
+		}
+		if !strings.Contains(err.Error(), configuredDatabaseLabel) {
+			t.Error("open error omitted the safe database label")
+		}
+	}
+}
+
+func TestMalformedConnectionStringDiagnosticDoesNotEchoDSN(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://ledger@127.0.0.1/ledger?password=secret&statement_cache_capacity=bad",
+		"host=127.0.0.1 user=ledger password=secret port=bad",
+	} {
+		_, err := open(context.Background(), dsn)
+		if err == nil {
+			t.Fatal("open accepted a malformed connection string")
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Error("malformed connection string error exposed the supplied password")
+		}
+	}
+}
+
 // txStore never commits: postings are append-only, so a committed test row would move every other test's counts.
 type txStore struct{ tx *sql.Tx }
 
