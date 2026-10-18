@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -32,6 +31,8 @@ const (
 
 	addrEnv = "LEDGER_ADDR"
 	dsnEnv  = "LEDGER_DSN"
+
+	configuredDatabaseLabel = "the configured database"
 
 	// connectGrace bounds the first connection to the database.
 	connectGrace = 10 * time.Second
@@ -216,7 +217,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer, getenv func(str
 	// The compose database is a tmpfs and starts empty.
 	applied, err := schema.Apply(ctx, db)
 	if err != nil {
-		return fmt.Errorf("apply the schema to %s: %w", redacted(cfg.dsn), err)
+		return fmt.Errorf("apply the schema to %s: %w", configuredDatabaseLabel, err)
 	}
 	if applied {
 		lg.Print("schema applied from internal/schema/0001_ledger.sql")
@@ -241,7 +242,7 @@ func store(db *sql.DB, d deadlines) ledgerhttp.Pool {
 func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("read %s as a connection string: %w", redacted(dsn), err)
+		return nil, fmt.Errorf("read %s as a connection string: %w", configuredDatabaseLabel, err)
 	}
 	for name, value := range databaseGraces {
 		if _, given := cfg.RuntimeParams[name]; !given {
@@ -261,18 +262,9 @@ func open(ctx context.Context, dsn string) (*sql.DB, error) {
 	if err := db.PingContext(pingCtx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("reach the database at %s: %w\n\nStart it with: make db-up, or point somewhere else with -dsn or $%s",
-			redacted(dsn), err, dsnEnv)
+			configuredDatabaseLabel, err, dsnEnv)
 	}
 	return db, nil
-}
-
-// redacted is the connection string with its password taken out.
-func redacted(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return "the configured database"
-	}
-	return u.Redacted()
 }
 
 // serveOn serves h on ln until ctx is done, then drains and returns.

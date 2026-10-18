@@ -254,12 +254,18 @@ func TestTheServerDefaultsToTheDatabaseTheTestsUse(t *testing.T) {
 
 func TestDatabaseDiagnosticsNeverEchoConnectionStrings(t *testing.T) {
 	for _, dsn := range []string{
-		"postgres://ledger:secret@db.example/ledger?sslmode=disable",
-		"postgres://ledger@db.example/ledger?password=secret&sslmode=disable",
-		"host=db.example user=ledger password=secret dbname=ledger",
+		"postgres://ledger@127.0.0.1:1/ledger_test?password=secret&sslmode=disable",
+		"host=127.0.0.1 port=1 user=ledger password=secret dbname=ledger_test sslmode=disable",
 	} {
-		if got := redacted(dsn); strings.Contains(got, "secret") {
-			t.Errorf("redacted(%q) = %q, which exposes the password", dsn, got)
+		_, err := open(context.Background(), dsn)
+		if err == nil {
+			t.Fatalf("open(%q) unexpectedly connected with the wrong password", dsn)
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Errorf("open(%q) returned an error that exposes the password: %v", dsn, err)
+		}
+		if !strings.Contains(err.Error(), configuredDatabaseLabel) {
+			t.Errorf("open(%q) error = %v, want the safe database label", dsn, err)
 		}
 	}
 }
