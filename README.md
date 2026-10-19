@@ -71,7 +71,8 @@ asking whether a transaction balances is one sum against zero. Postgres holds
 that sum in a constraint trigger deferred to the end of the transaction. No
 caller can commit an entry that does not balance.
 
-One posting is a `bigint`, so a single amount runs to ±9,223,372,036,854,775,807.
+One posting is a `bigint`, so a single amount runs from
+-9,223,372,036,854,775,808 to 9,223,372,036,854,775,807.
 A total of them has no ceiling: a balance, a side of the trial balance and the
 net an entry is refused with are all `numeric` in Postgres and arbitrary
 precision in Go. Every amount the book takes, it can add up.

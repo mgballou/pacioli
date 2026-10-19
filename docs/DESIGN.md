@@ -290,10 +290,10 @@ over the wire and none of them is bounded.
 
 ## 15. One posting is fixed-width; a total of postings is not
 
-**What it does.** `amount_minor` is `bigint`, so a single posting runs to
-±9,223,372,036,854,775,807 and no further. Every *total* of postings is
-`numeric`: an account balance, either side of the trial balance, and the sum the
-balance trigger takes. In Go each of those is a `ledger.Minor`, an
+**What it does.** `amount_minor` is `bigint`, so a single posting runs from
+-9,223,372,036,854,775,808 to 9,223,372,036,854,775,807. Every *total* of
+postings is `numeric`: an account balance, either side of the trial balance, and
+the sum the balance trigger takes. In Go each of those is a `ledger.Minor`, an
 arbitrary-precision integer that scans a `numeric` off the row and writes itself
 back out as a JSON number. A `Leg` stays an `int64`, because that is what one
 posting is. No float appears on either side.
