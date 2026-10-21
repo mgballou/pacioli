@@ -321,6 +321,9 @@ func TestASecondJSONValueInOneBodyIsRefused(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400 — the second entry was thrown away silently: %s", res.StatusCode, body)
 	}
+	if got := read(t, body); got.Error != "the request body carries more than one json value" {
+		t.Errorf("error = %q, want %q", got.Error, "the request body carries more than one json value")
+	}
 	if bal := balanceOver(t, srv, cash); bal != 4500 {
 		t.Errorf("%s = %d, so the first of the two was posted anyway", cash, bal)
 	}

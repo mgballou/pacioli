@@ -288,9 +288,9 @@ func TestEachEndpointReadsOnlyTheBodyItsOwnBoundsAllow(t *testing.T) {
 				t.Fatalf("a body of %d bytes gave %d, want 413: %s", e.ceiling+1, res.StatusCode, body)
 			}
 
-			var got refusal
-			if err := json.Unmarshal(body, &got); err != nil {
-				t.Fatalf("unmarshal %q: %v", body, err)
+			got := read(t, body)
+			if got.Error != "the request body is larger than this endpoint accepts" {
+				t.Errorf("error = %q, want %q", got.Error, "the request body is larger than this endpoint accepts")
 			}
 			if !strings.Contains(got.Expected, strconv.Itoa(e.ceiling)) {
 				t.Errorf("expected %q, want it to name the ceiling of %d", got.Expected, e.ceiling)
