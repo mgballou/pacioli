@@ -60,6 +60,78 @@ Then, in another terminal:
 Named for Luca Pacioli, who published the first written account of double-entry
 bookkeeping in Venice in 1494.
 
+## Install a release
+
+`v0.1.0` is the supported release. Pushing its tag publishes four binaries and a
+checksum file to the
+[GitHub release](https://github.com/mgballou/pacioli/releases/tag/v0.1.0), and
+one image to `ghcr.io/mgballou/pacioli:v0.1.0`. A command marked *(needs
+v0.1.0)* works once that release exists.
+
+| File                          | For                        |
+|-------------------------------|----------------------------|
+| `pacioli-v0.1.0-linux-amd64`  | Linux, x86-64              |
+| `pacioli-v0.1.0-linux-arm64`  | Linux, ARM64               |
+| `pacioli-v0.1.0-darwin-amd64` | macOS, Intel               |
+| `pacioli-v0.1.0-darwin-arm64` | macOS, Apple silicon       |
+| `SHA256SUMS`                  | checking the other four    |
+
+The binary and the image each need a Postgres they can create tables in, and
+put the schema in on their first start. This one keeps its data until you
+remove the container, and starts now:
+
+```console
+$ docker network create pacioli
+$ docker run -d --name pacioli-db --network pacioli -p 127.0.0.1:55434:5432 \
+    -e POSTGRES_USER=pacioli -e POSTGRES_PASSWORD=pacioli -e POSTGRES_DB=pacioli \
+    postgres:18-alpine
+$ until docker exec pacioli-db pg_isready -h 127.0.0.1 -q; do sleep 1; done
+```
+
+**The binary** *(needs v0.1.0)*. Swap `darwin-arm64` for the row that fits
+your machine:
+
+```console
+$ base=https://github.com/mgballou/pacioli/releases/download/v0.1.0
+$ curl -fsSL --remote-name-all "$base/pacioli-v0.1.0-darwin-arm64" "$base/SHA256SUMS"
+$ shasum -a 256 -c --ignore-missing SHA256SUMS
+pacioli-v0.1.0-darwin-arm64: OK
+$ chmod +x pacioli-v0.1.0-darwin-arm64
+$ LEDGER_DSN='postgres://pacioli:pacioli@127.0.0.1:55434/pacioli?sslmode=disable' \
+    ./pacioli-v0.1.0-darwin-arm64 serve
+```
+
+**The image** *(needs v0.1.0)*. It is built for linux/amd64, so an ARM64
+machine runs it under emulation, and Docker warns that the platforms differ:
+
+```console
+$ docker pull ghcr.io/mgballou/pacioli:v0.1.0
+$ docker run --rm --network pacioli -p 127.0.0.1:8080:8080 \
+    -e LEDGER_DSN='postgres://pacioli:pacioli@pacioli-db:5432/pacioli?sslmode=disable' \
+    ghcr.io/mgballou/pacioli:v0.1.0
+```
+
+Both serve on `127.0.0.1:8080`, which `docker compose up` also holds, so run one
+at a time. From another terminal:
+
+```console
+$ curl -s localhost:8080/v1/trial-balance
+{
+  "trial": []
+}
+```
+
+`docker rm -f -v pacioli-db && docker network rm pacioli` removes the database
+and everything in it.
+
+**Compose or Kubernetes.** Both run from a checkout of this repository.
+`docker compose up` builds the image from the source beside it and runs one
+ledger and one Postgres on a named volume, on one machine. The four manifests
+in `deploy/` run two ledger replicas behind a `ClusterIP` Service and Postgres
+as a StatefulSet on a persistent volume claim, and you reach them with
+`kubectl port-forward` on 18080. `docs/RUNBOOK.md` stands that cluster up,
+names the image it runs, and reads it when it will not come up.
+
 ## What it does
 
 A chart of accounts, an append-only book of postings, and balances derived from
