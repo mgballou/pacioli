@@ -10,11 +10,11 @@ sequence on a kind cluster on every push.
 
 ## What it needs
 
-- **A cluster whose node already holds the image.** The ledger's pod sets
-  `imagePullPolicy: Never` and there is no registry. OrbStack's cluster runs on
-  the same Docker daemon as `docker build`, so building is enough. A kind node
-  keeps its own copy, so every build is followed by `kind load docker-image`.
-- **`kubectl`, `docker` and `curl`.**
+- **A cluster that can reach `ghcr.io`.** The ledger's pod runs
+  `ghcr.io/mgballou/pacioli:v0.1.0` with `imagePullPolicy: IfNotPresent`, so
+  each node pulls the image on its first start and keeps it. Until the `v0.1.0`
+  tag publishes, [build the image yourself](#building-the-image-yourself).
+- **`kubectl` and `curl`**, and `docker` to build the image yourself.
 - **Port 18080 free on this machine.** `docker compose up` holds 8080, and
   [a port-forward onto 8080](#the-port-forward-answers-for-the-wrong-ledger)
   then reaches two ledgers under one name.
@@ -43,12 +43,39 @@ moves it back. If this answers `error: current-context is not set`, read
 [the first entry under trouble](#the-server-could-not-find-the-requested-resource)
 before anything else.
 
+## Building the image yourself
+
+Until the `v0.1.0` tag publishes, the registry has no image to give and the
+ledger's pods stop at
+[`ImagePullBackOff`](#errimagepull-or-imagepullbackoff). Build the image under
+the release name and the node finds it without pulling. OrbStack's cluster runs
+on the same Docker daemon as `docker build`, so building is enough:
+
+```console
+$ docker build -t ghcr.io/mgballou/pacioli:v0.1.0 .
+$ kubectl apply -f deploy/
+```
+
+A kind node keeps its own copy, so load the build into it:
+
+```console
+$ docker build -t ghcr.io/mgballou/pacioli:v0.1.0 .
+$ kind load docker-image ghcr.io/mgballou/pacioli:v0.1.0 --name pacioli
+$ kubectl apply -f deploy/
+```
+
+On 21 October 2026 the OrbStack build was enough: the kubelet reported
+`Container image "ghcr.io/mgballou/pacioli:v0.1.0" already present on machine`
+and started the container without a pull. A node never pulls over an image it
+already holds under the tag, so once the release publishes, run
+`docker rmi ghcr.io/mgballou/pacioli:v0.1.0` on OrbStack, or create the kind
+cluster again, and the next pod start pulls the published image.
+
 ## Standing it up
 
 On OrbStack:
 
 ```console
-$ docker build -t pacioli-ledger:k8s .
 $ kubectl apply -f deploy/
 ```
 
@@ -56,8 +83,6 @@ On kind:
 
 ```console
 $ kind create cluster --name pacioli
-$ docker build -t pacioli-ledger:k8s .
-$ kind load docker-image pacioli-ledger:k8s --name pacioli
 $ kubectl apply -f deploy/
 ```
 
@@ -398,32 +423,37 @@ If `postgres-0` is `1/1` and the ledger still exits, the log line names the
 reason. The connection string it read is `LEDGER_DSN` in the Secret
 `ledger-secret`, in `deploy/10-config.yaml`.
 
-### `ErrImageNeverPull`
+### `ErrImagePull` or `ImagePullBackOff`
 
 ```console
-$ kubectl get pods -n pacioli
-NAME                      READY   STATUS              RESTARTS      AGE
-ledger-5cd6786775-8dl6m   1/1     Running             2 (70s ago)   88s
-ledger-5cd6786775-8fs9g   1/1     Running             2 (70s ago)   88s
-ledger-66785b86d7-9fvfc   0/1     ErrImageNeverPull   0             10s
-postgres-0                1/1     Running             0             17s
+$ kubectl get pods -n pacioli-pull-check
+NAME     READY   STATUS             RESTARTS   AGE
+ledger   0/1     ImagePullBackOff   0          15s
 
-$ kubectl describe pod ledger-66785b86d7-9fvfc -n pacioli
+$ kubectl describe pod ledger -n pacioli-pull-check
 ...
-  Warning  ErrImageNeverPull  10s (x2 over 10s)  kubelet            Container image "pacioli-ledger:missing" is not present with pull policy of Never
-  Warning  Failed             10s (x2 over 10s)  kubelet            Error: ErrImageNeverPull
+  Normal   Pulling    4s (x2 over 16s)  kubelet            Pulling image "ghcr.io/mgballou/pacioli:v0.1.0"
+  Warning  Failed     4s (x2 over 15s)  kubelet            Failed to pull image "ghcr.io/mgballou/pacioli:v0.1.0": Error response from daemon: Head "https://ghcr.io/v2/mgballou/pacioli/manifests/v0.1.0": denied
+  Warning  Failed     4s (x2 over 15s)  kubelet            Error: ErrImagePull
 ```
 
-The node does not hold the tag the pod asks for, and `Never` forbids a pull. On
-OrbStack, build the image again under the tag in `deploy/30-ledger.yaml`,
-`pacioli-ledger:k8s`. On kind, run `kind load docker-image` after the build.
+The node does not hold the tag the pod asks for, and the registry refused to
+hand it over. This came from one pod in a scratch namespace on 21 October 2026,
+before `v0.1.0` was published. `denied` from `ghcr.io` means the tag does not
+exist, or the package is private: GitHub keeps a new package private until its
+owner makes it public. Check the tag in `deploy/30-ledger.yaml` against the
+[published versions](https://github.com/mgballou/pacioli/pkgs/container/pacioli),
+or [build the image yourself](#building-the-image-yourself). `ErrImagePull` is
+a failed attempt and `ImagePullBackOff` the wait before the next. The kubelet
+keeps trying, so once the node can get the image the pod starts without another
+apply.
 
-This one came from `kubectl set image deployment/ledger
-ledger=pacioli-ledger:missing -n pacioli`. The two pods from before kept
-answering, because the Deployment sets `maxUnavailable: 0` and the new pod never
-went ready: a poller inside the cluster sent 141 requests through the Service
-across the failed rollout, and all 141 succeeded. The rollout times out, and one
-command puts it back:
+A rollout to a tag no node can get leaves the ledger answering. After
+`kubectl set image deployment/ledger ledger=pacioli-ledger:missing -n pacioli`
+the two pods from before kept answering, because the Deployment sets
+`maxUnavailable: 0` and the new pod never went ready: a poller inside the
+cluster sent 141 requests through the Service across the failed rollout, and all
+141 succeeded. The rollout times out, and one command puts it back:
 
 ```console
 $ kubectl rollout status deployment/ledger -n pacioli --timeout=30s

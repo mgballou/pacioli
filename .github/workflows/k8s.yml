@@ -59,7 +59,7 @@ jobs:
 
       - name: Apply the manifests
         run: |
-          sed -i 's|pacioli-ledger:k8s|pacioli-ledger:ci|' deploy/30-ledger.yaml
+          sed -i 's|ghcr.io/mgballou/pacioli:v0.1.0|pacioli-ledger:ci|' deploy/30-ledger.yaml
           kubectl apply -f deploy/
 
       - name: Wait for the rollout

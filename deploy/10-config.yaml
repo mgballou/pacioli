@@ -1,9 +1,9 @@
 # The two things compose bakes into the file and Kubernetes does not.
 #
 # ConfigMap is the part a reader may see. Secret is the part they may not. The
-# image holds neither: `docker history pacioli-ledger:k8s` shows LEDGER_ADDR
-# from the Dockerfile and no DSN at all, and the DSN is the one with the
-# password in it.
+# image holds neither: `docker history ghcr.io/mgballou/pacioli:v0.1.0` shows
+# LEDGER_ADDR from the Dockerfile and no DSN at all, and the DSN is the one with
+# the password in it.
 #
 # A Secret is base64, not encryption. Anyone with `get secret` in this namespace
 # reads it. What it buys here is that the credential is not in the image, not in
