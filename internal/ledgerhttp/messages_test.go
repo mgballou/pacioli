@@ -494,6 +494,9 @@ func TestABodyWithSeveralBadFieldsNamesEveryOne(t *testing.T) {
 	}
 
 	got := read(t, body)
+	if got.Error != "the request body carries fields this endpoint cannot read" {
+		t.Errorf("error = %q, want %q", got.Error, "the request body carries fields this endpoint cannot read")
+	}
 	want := []string{"currency", "description", "postings[0].amount_minor", "occurred_at"}
 	var named []string
 	for _, f := range got.Fields {

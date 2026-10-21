@@ -231,6 +231,13 @@ func TestAQueryStringThatCannotBeReadIsRefused(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Errorf("status %d, want 400", res.StatusCode)
 	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if got := read(t, body); got.Error != "the query string could not be read" {
+		t.Errorf("error = %q, want %q", got.Error, "the query string could not be read")
+	}
 }
 
 func listed(t *testing.T, body []byte) []string {

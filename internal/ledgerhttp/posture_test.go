@@ -46,8 +46,12 @@ func TestOpeningAnAccountNeedsAJSONContentType(t *testing.T) {
 			if res.StatusCode != http.StatusUnsupportedMediaType {
 				t.Fatalf("status %d, want 415: %s", res.StatusCode, body)
 			}
-			if !strings.Contains(string(body), "application/json") {
-				t.Errorf("the refusal does not name what it wanted: %s", body)
+			got := read(t, body)
+			if got.Error != "this endpoint takes only a json body, and the request does not declare one" {
+				t.Errorf("error = %q, want %q", got.Error, "this endpoint takes only a json body, and the request does not declare one")
+			}
+			if got.Expected != "application/json" {
+				t.Errorf("expected = %q, want application/json", got.Expected)
 			}
 		})
 	}
@@ -74,6 +78,13 @@ func TestPostingATransactionNeedsAJSONContentType(t *testing.T) {
 				`{"currency":"GBP","description":"smuggled","postings":[]}`)
 			if res.StatusCode != http.StatusUnsupportedMediaType {
 				t.Fatalf("status %d, want 415: %s", res.StatusCode, body)
+			}
+			got := read(t, body)
+			if got.Error != "this endpoint takes only a json body, and the request does not declare one" {
+				t.Errorf("error = %q, want %q", got.Error, "this endpoint takes only a json body, and the request does not declare one")
+			}
+			if got.Expected != "application/json" {
+				t.Errorf("expected = %q, want application/json", got.Expected)
 			}
 		})
 	}
