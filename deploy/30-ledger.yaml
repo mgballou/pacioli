@@ -45,11 +45,11 @@ spec:
         runAsUser: 10001
       containers:
         - name: ledger
-          image: pacioli-ledger:k8s
-          # The image is built into the same daemon the cluster runs on, so
-          # there is nothing to pull and no registry. Never means a typo in the
-          # tag fails loudly instead of reaching out to Docker Hub.
-          imagePullPolicy: Never
+          image: ghcr.io/mgballou/pacioli:v0.1.0
+          # The release image, pulled from GitHub's registry on a node's first
+          # start and kept after. The tag names one release, so a node that
+          # already holds it has nothing newer to fetch.
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:
